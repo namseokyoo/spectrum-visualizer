@@ -3,9 +3,10 @@
  *
  * D3.js-based interactive visualization of CIE color spaces
  * Supports both CIE 1931 xy and CIE 1976 u'v' representations
+ * Features Spectrum-on-Locus visualization with draggable spectrum ridge
  */
 
-import { useEffect, useRef, useMemo, useCallback } from 'react';
+import { useEffect, useRef, useMemo } from 'react';
 import * as d3 from 'd3';
 import { SPECTRAL_LOCUS_XY, COLOR_GAMUTS } from '../data/cie1931';
 import { xyToUV } from '../lib/chromaticity';
@@ -15,6 +16,7 @@ import type {
   DiagramMode,
   GamutType,
   Snapshot,
+  SpectrumPoint,
 } from '../types/spectrum';
 
 // Wavelength to approximate RGB color for spectral locus gradient
@@ -82,6 +84,67 @@ interface CIEDiagramProps {
   snapshots?: Snapshot[];
   onShiftChange?: (deltaX: number, deltaY: number) => void;
   hexColor?: string;
+  spectrum?: SpectrumPoint[];
+  shiftNm?: number;
+}
+
+// Calculate normal vector at a point on the locus (pointing outward from the color space)
+function calculateNormal(
+  prev: { x: number; y: number },
+  curr: { x: number; y: number },
+  next: { x: number; y: number }
+): { nx: number; ny: number } {
+  // Calculate tangent direction
+  const dx = next.x - prev.x;
+  const dy = next.y - prev.y;
+  const len = Math.sqrt(dx * dx + dy * dy);
+
+  if (len === 0) return { nx: 0, ny: -1 };
+
+  // Normal is perpendicular to tangent, pointing outward (away from color space center)
+  // The center of the horseshoe is approximately at (0.33, 0.33)
+  let nx = -dy / len;
+  let ny = dx / len;
+
+  // Ensure normal points outward (away from center)
+  const centerX = 0.33;
+  const centerY = 0.33;
+  const toCenterX = centerX - curr.x;
+  const toCenterY = centerY - curr.y;
+
+  // If normal points toward center, flip it
+  if (nx * toCenterX + ny * toCenterY > 0) {
+    nx = -nx;
+    ny = -ny;
+  }
+
+  return { nx, ny };
+}
+
+// Get spectrum intensity at a specific wavelength (with interpolation)
+function getSpectrumIntensityAtWavelength(
+  spectrum: SpectrumPoint[],
+  wavelength: number,
+  shiftNm: number
+): number {
+  if (!spectrum || spectrum.length === 0) return 0;
+
+  // Apply shift: we're looking for the original wavelength that would map to this position
+  const targetWavelength = wavelength - shiftNm;
+
+  // Find surrounding points for interpolation
+  for (let i = 0; i < spectrum.length - 1; i++) {
+    const p1 = spectrum[i];
+    const p2 = spectrum[i + 1];
+
+    if (targetWavelength >= p1.wavelength && targetWavelength <= p2.wavelength) {
+      // Linear interpolation
+      const t = (targetWavelength - p1.wavelength) / (p2.wavelength - p1.wavelength);
+      return p1.intensity * (1 - t) + p2.intensity * t;
+    }
+  }
+
+  return 0;
 }
 
 export function CIEDiagram({
@@ -92,6 +155,8 @@ export function CIEDiagram({
   snapshots = [],
   onShiftChange,
   hexColor = '#ffffff',
+  spectrum = [],
+  shiftNm = 0,
 }: CIEDiagramProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const isDragging = useRef(false);
@@ -116,6 +181,46 @@ export function CIEDiagram({
       };
     });
   }, [mode]);
+
+  // Calculate spectrum ridge data (Spectrum-on-Locus)
+  // Each point on the locus gets extruded along its normal based on spectrum intensity
+  const spectrumRidgeData = useMemo(() => {
+    if (!spectrum || spectrum.length === 0) return null;
+
+    // Filter locus points to visible spectrum range (380-700nm for meaningful display)
+    const visibleLocus = spectralLocusData.filter(
+      (p) => p.wavelength >= 380 && p.wavelength <= 700
+    );
+
+    // Scale factor for ridge height (coordinate units)
+    const ridgeScale = mode === 'CIE1931' ? 0.08 : 0.06;
+
+    // Calculate ridge points
+    const ridgePoints: { x: number; y: number; baseX: number; baseY: number; wavelength: number; intensity: number }[] = [];
+
+    for (let i = 0; i < visibleLocus.length; i++) {
+      const curr = visibleLocus[i];
+      const prev = visibleLocus[Math.max(0, i - 1)];
+      const next = visibleLocus[Math.min(visibleLocus.length - 1, i + 1)];
+
+      const { nx, ny } = calculateNormal(prev, curr, next);
+      const intensity = getSpectrumIntensityAtWavelength(spectrum, curr.wavelength, shiftNm);
+
+      // Extrude point along normal based on intensity
+      const extrudeDistance = intensity * ridgeScale;
+
+      ridgePoints.push({
+        baseX: curr.x,
+        baseY: curr.y,
+        x: curr.x + nx * extrudeDistance,
+        y: curr.y + ny * extrudeDistance,
+        wavelength: curr.wavelength,
+        intensity,
+      });
+    }
+
+    return ridgePoints;
+  }, [spectralLocusData, spectrum, shiftNm, mode]);
 
   // Current point in diagram coordinates
   const displayPoint = useMemo(() => {
@@ -150,29 +255,6 @@ export function CIEDiagram({
       };
     });
   }, [enabledGamuts, mode]);
-
-  // Handle drag interactions
-  const handleDrag = useCallback(
-    (event: MouseEvent, svg: SVGSVGElement, xScale: d3.ScaleLinear<number, number>, yScale: d3.ScaleLinear<number, number>) => {
-      if (!isDragging.current || !onShiftChange) return;
-
-      const rect = svg.getBoundingClientRect();
-      const x = event.clientX - rect.left;
-      const y = event.clientY - rect.top;
-
-      const currentX = xScale.invert(x);
-      const currentY = yScale.invert(y);
-
-      if (lastDragPos.current) {
-        const deltaX = currentX - lastDragPos.current.x;
-        const deltaY = currentY - lastDragPos.current.y;
-        onShiftChange(deltaX, deltaY);
-      }
-
-      lastDragPos.current = { x: currentX, y: currentY };
-    },
-    [onShiftChange]
-  );
 
   // D3 rendering
   useEffect(() => {
@@ -227,11 +309,12 @@ export function CIEDiagram({
     const g = svg.append('g');
 
     // Draw filled horseshoe shape with gradient background
+    // Use curveCatmullRom for smoother curves (more natural interpolation)
     const locusPath = d3
       .line<{ x: number; y: number }>()
       .x((d) => xScale(d.x))
       .y((d) => yScale(d.y))
-      .curve(d3.curveCardinal.tension(0.8));
+      .curve(d3.curveCatmullRom.alpha(0.5));
 
     // Close the path for filled horseshoe
     const closedLocusData = [
@@ -253,8 +336,124 @@ export function CIEDiagram({
       .attr('d', locusPath)
       .attr('fill', 'none')
       .attr('stroke', 'url(#spectral-gradient)')
-      .attr('stroke-width', 3)
+      .attr('stroke-width', 2)
       .attr('stroke-linecap', 'round');
+
+    // Draw Spectrum-on-Locus Ridge (mountain-like visualization)
+    if (spectrumRidgeData && spectrumRidgeData.length > 0) {
+      // Create the ridge area path
+      // Base line is the spectral locus, top line is the extruded ridge
+      const ridgeAreaData: { x: number; y: number }[] = [];
+
+      // Add top points (extruded)
+      spectrumRidgeData.forEach((p) => {
+        ridgeAreaData.push({ x: p.x, y: p.y });
+      });
+
+      // Add base points in reverse order to close the shape
+      for (let i = spectrumRidgeData.length - 1; i >= 0; i--) {
+        ridgeAreaData.push({
+          x: spectrumRidgeData[i].baseX,
+          y: spectrumRidgeData[i].baseY,
+        });
+      }
+
+      // Create smooth area path
+      const ridgePath = d3
+        .line<{ x: number; y: number }>()
+        .x((d) => xScale(d.x))
+        .y((d) => yScale(d.y))
+        .curve(d3.curveCatmullRom.alpha(0.5));
+
+      // Ridge fill gradient
+      const ridgeGradient = defs
+        .append('linearGradient')
+        .attr('id', 'ridge-gradient')
+        .attr('gradientUnits', 'userSpaceOnUse')
+        .attr('x1', xScale(spectrumRidgeData[0].baseX))
+        .attr('y1', yScale(spectrumRidgeData[0].baseY))
+        .attr('x2', xScale(spectrumRidgeData[spectrumRidgeData.length - 1].baseX))
+        .attr('y2', yScale(spectrumRidgeData[spectrumRidgeData.length - 1].baseY));
+
+      // Add gradient stops based on wavelength colors
+      spectrumRidgeData.forEach((p, i) => {
+        if (p.intensity > 0.01) {
+          ridgeGradient
+            .append('stop')
+            .attr('offset', `${(i / (spectrumRidgeData.length - 1)) * 100}%`)
+            .attr('stop-color', wavelengthToRGB(p.wavelength))
+            .attr('stop-opacity', 0.3 + p.intensity * 0.5);
+        }
+      });
+
+      // Draw filled ridge area
+      const ridgeGroup = g.append('g').attr('class', 'spectrum-ridge');
+
+      ridgeGroup
+        .append('path')
+        .datum(ridgeAreaData)
+        .attr('d', ridgePath)
+        .attr('fill', 'url(#ridge-gradient)')
+        .attr('fill-opacity', 0.6)
+        .attr('stroke', 'none')
+        .attr('class', 'ridge-fill')
+        .style('cursor', 'ew-resize');
+
+      // Draw ridge outline (top edge only)
+      const ridgeOutlinePath = d3
+        .line<{ x: number; y: number }>()
+        .x((d) => xScale(d.x))
+        .y((d) => yScale(d.y))
+        .curve(d3.curveCatmullRom.alpha(0.5));
+
+      const ridgeTopPoints = spectrumRidgeData.map((p) => ({ x: p.x, y: p.y }));
+
+      ridgeGroup
+        .append('path')
+        .datum(ridgeTopPoints)
+        .attr('d', ridgeOutlinePath)
+        .attr('fill', 'none')
+        .attr('stroke', hexColor)
+        .attr('stroke-width', 2)
+        .attr('stroke-opacity', 0.8)
+        .attr('class', 'ridge-outline')
+        .style('cursor', 'ew-resize');
+
+      // Add glow effect to the ridge peak area
+      const peakPoint = spectrumRidgeData.reduce((max, p) =>
+        p.intensity > max.intensity ? p : max
+      );
+
+      if (peakPoint.intensity > 0.1) {
+        ridgeGroup
+          .append('circle')
+          .attr('cx', xScale(peakPoint.x))
+          .attr('cy', yScale(peakPoint.y))
+          .attr('r', 12)
+          .attr('fill', hexColor)
+          .attr('opacity', 0.3)
+          .attr('filter', 'url(#glow-filter)')
+          .style('pointer-events', 'none');
+      }
+
+      // Add glow filter
+      const glowFilter = defs
+        .append('filter')
+        .attr('id', 'glow-filter')
+        .attr('x', '-50%')
+        .attr('y', '-50%')
+        .attr('width', '200%')
+        .attr('height', '200%');
+
+      glowFilter
+        .append('feGaussianBlur')
+        .attr('stdDeviation', '4')
+        .attr('result', 'coloredBlur');
+
+      const glowMerge = glowFilter.append('feMerge');
+      glowMerge.append('feMergeNode').attr('in', 'coloredBlur');
+      glowMerge.append('feMergeNode').attr('in', 'SourceGraphic');
+    }
 
     // Draw purple line (closing the horseshoe)
     const purpleLine = [
@@ -464,29 +663,104 @@ export function CIEDiagram({
       .attr('text-anchor', 'end')
       .text(mode === 'CIE1931' ? 'CIE 1931 xy' : "CIE 1976 u'v'");
 
-    // Drag handlers
+    // Drag handlers for spectrum ridge
     const svgElement = svgRef.current;
 
-    const handleMouseDown = (e: MouseEvent) => {
-      // Check if click is near current point
-      const rect = svgElement.getBoundingClientRect();
-      const mouseX = e.clientX - rect.left;
-      const mouseY = e.clientY - rect.top;
+    // Check if a point is inside the spectrum ridge area
+    const isInsideRidge = (mouseX: number, mouseY: number): boolean => {
+      if (!spectrumRidgeData || spectrumRidgeData.length === 0) return false;
+
+      // Check if mouse is within the ridge bounding box (with some tolerance)
+      const ridgeMinX = Math.min(...spectrumRidgeData.map((p) => Math.min(xScale(p.x), xScale(p.baseX)))) - 10;
+      const ridgeMaxX = Math.max(...spectrumRidgeData.map((p) => Math.max(xScale(p.x), xScale(p.baseX)))) + 10;
+      const ridgeMinY = Math.min(...spectrumRidgeData.map((p) => Math.min(yScale(p.y), yScale(p.baseY)))) - 10;
+      const ridgeMaxY = Math.max(...spectrumRidgeData.map((p) => Math.max(yScale(p.y), yScale(p.baseY)))) + 10;
+
+      if (mouseX < ridgeMinX || mouseX > ridgeMaxX || mouseY < ridgeMinY || mouseY > ridgeMaxY) {
+        return false;
+      }
+
+      // More precise check: find if mouse is near any ridge segment
+      for (let i = 0; i < spectrumRidgeData.length; i++) {
+        const p = spectrumRidgeData[i];
+        const px = xScale(p.x);
+        const py = yScale(p.y);
+        const bx = xScale(p.baseX);
+        const by = yScale(p.baseY);
+
+        // Check distance to the ridge line segment
+        const distToTop = Math.sqrt(Math.pow(mouseX - px, 2) + Math.pow(mouseY - py, 2));
+        const distToBase = Math.sqrt(Math.pow(mouseX - bx, 2) + Math.pow(mouseY - by, 2));
+
+        if (distToTop < 20 || distToBase < 20) {
+          return true;
+        }
+
+        // Check if point is between base and top
+        if (p.intensity > 0.05) {
+          const midX = (px + bx) / 2;
+          const midY = (py + by) / 2;
+          const distToMid = Math.sqrt(Math.pow(mouseX - midX, 2) + Math.pow(mouseY - midY, 2));
+          if (distToMid < 25) {
+            return true;
+          }
+        }
+      }
+
+      return false;
+    };
+
+    // Also check if near current point (fallback for when no spectrum)
+    const isNearCurrentPoint = (mouseX: number, mouseY: number): boolean => {
       const pointX = xScale(displayPoint.x);
       const pointY = yScale(displayPoint.y);
       const distance = Math.sqrt(
         Math.pow(mouseX - pointX, 2) + Math.pow(mouseY - pointY, 2)
       );
+      return distance < 20;
+    };
 
-      if (distance < 20) {
+    const handleMouseDown = (e: MouseEvent) => {
+      const rect = svgElement.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+
+      // Check if click is on spectrum ridge or current point
+      const onRidge = spectrumRidgeData && spectrumRidgeData.length > 0 && isInsideRidge(mouseX, mouseY);
+      const onPoint = isNearCurrentPoint(mouseX, mouseY);
+
+      if (onRidge || onPoint) {
         isDragging.current = true;
-        lastDragPos.current = { x: xScale.invert(mouseX), y: yScale.invert(mouseY) };
-        svgElement.style.cursor = 'grabbing';
+        lastDragPos.current = { x: mouseX, y: mouseY };
+        svgElement.style.cursor = 'ew-resize';
       }
     };
 
     const handleMouseMove = (e: MouseEvent) => {
-      handleDrag(e, svgElement, xScale, yScale);
+      const rect = svgElement.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+
+      // Update cursor based on hover state
+      if (!isDragging.current) {
+        const onRidge = spectrumRidgeData && spectrumRidgeData.length > 0 && isInsideRidge(mouseX, mouseY);
+        const onPoint = isNearCurrentPoint(mouseX, mouseY);
+        if (onRidge || onPoint) {
+          svgElement.style.cursor = 'ew-resize';
+        } else {
+          svgElement.style.cursor = 'default';
+        }
+      }
+
+      // Handle dragging
+      if (isDragging.current && lastDragPos.current && onShiftChange) {
+        // Calculate horizontal delta in pixels
+        // Use coordinate-based shift change for wavelength shift
+        const coordDeltaX = xScale.invert(mouseX) - xScale.invert(lastDragPos.current.x);
+        onShiftChange(coordDeltaX, 0);
+
+        lastDragPos.current = { x: mouseX, y: mouseY };
+      }
     };
 
     const handleMouseUp = () => {
@@ -509,12 +783,14 @@ export function CIEDiagram({
   }, [
     bounds,
     spectralLocusData,
+    spectrumRidgeData,
     displayPoint,
     snapshotPoints,
     gamutData,
     hexColor,
     mode,
-    handleDrag,
+    shiftNm,
+    onShiftChange,
   ]);
 
   return (
@@ -535,6 +811,8 @@ function getGamutColor(gamut: GamutType): string {
       return '#22c55e';
     case 'BT.2020':
       return '#3b82f6';
+    case 'AdobeRGB':
+      return '#f59e0b';
     default:
       return '#888888';
   }

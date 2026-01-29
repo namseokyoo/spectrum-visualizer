@@ -116,7 +116,10 @@ function App() {
                   step="0.5"
                   value={shiftNm}
                   onChange={(e) => handleShiftChange(parseFloat(e.target.value))}
-                  className="flex-1 h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                  className="flex-1 h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500 wavelength-slider"
+                  style={{
+                    background: `linear-gradient(to right, #3b82f6 0%, #3b82f6 ${((shiftNm + 100) / 200) * 100}%, #374151 ${((shiftNm + 100) / 200) * 100}%, #374151 100%)`
+                  }}
                 />
               </div>
               <div className="flex items-center justify-between">
@@ -254,12 +257,14 @@ function App() {
               snapshots={snapshots}
               onShiftChange={handleDiagramDrag}
               hexColor={chromaticity.hexColor}
+              spectrum={spectrum}
+              shiftNm={shiftNm}
             />
           </div>
 
           {/* Drag hint */}
           <p className="text-center text-[10px] text-gray-600 mt-2">
-            Drag the color point to shift wavelength interactively
+            Drag the spectrum ridge on the locus to shift wavelength interactively
           </p>
         </main>
 
@@ -272,11 +277,12 @@ function App() {
               Reference Gamuts
             </h2>
             <div className="bg-gray-900/50 rounded-lg p-3 border border-gray-700/30 space-y-1">
-              {(['sRGB', 'DCI-P3', 'BT.2020'] as const).map((gamut) => {
+              {(['sRGB', 'DCI-P3', 'BT.2020', 'AdobeRGB'] as const).map((gamut) => {
                 const gamutColors = {
                   'sRGB': { color: '#ef4444', desc: 'Standard RGB' },
                   'DCI-P3': { color: '#22c55e', desc: 'Digital Cinema' },
                   'BT.2020': { color: '#3b82f6', desc: 'Ultra HD' },
+                  'AdobeRGB': { color: '#f59e0b', desc: 'Adobe RGB (1998)' },
                 };
                 return (
                   <label

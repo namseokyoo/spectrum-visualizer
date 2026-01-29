@@ -210,4 +210,13 @@ export const COLOR_GAMUTS = {
     ],
     whitePoint: { x: 0.3127, y: 0.3290 },  // D65
   },
+  'AdobeRGB': {
+    name: 'Adobe RGB',
+    vertices: [
+      { x: 0.6400, y: 0.3300 },  // Red
+      { x: 0.2100, y: 0.7100 },  // Green
+      { x: 0.1500, y: 0.0600 },  // Blue
+    ],
+    whitePoint: { x: 0.3127, y: 0.3290 },  // D65
+  },
 };

@@ -52,8 +52,7 @@ input[type="range"] {
 }
 
 input[type="range"]::-webkit-slider-runnable-track {
-  background: linear-gradient(to right, #3b82f6 0%, #3b82f6 50%, #374151 50%, #374151 100%);
-  background-size: 100% 100%;
+  background: inherit;
   height: 6px;
   border-radius: 3px;
 }

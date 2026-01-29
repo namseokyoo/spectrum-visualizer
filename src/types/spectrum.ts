@@ -57,4 +57,4 @@ export interface Snapshot {
 export type DiagramMode = 'CIE1931' | 'CIE1976';
 
 // Color gamut type
-export type GamutType = 'sRGB' | 'DCI-P3' | 'BT.2020';
+export type GamutType = 'sRGB' | 'DCI-P3' | 'BT.2020' | 'AdobeRGB';
