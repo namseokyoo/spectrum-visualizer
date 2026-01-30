@@ -51,6 +51,11 @@ function App() {
     handleShiftChange(shiftNm + nmDelta);
   }, [shiftNm, handleShiftChange]);
 
+  // Handle keyboard wavelength shift (direct nm delta)
+  const handleWavelengthShift = useCallback((delta: number) => {
+    handleShiftChange(shiftNm + delta);
+  }, [shiftNm, handleShiftChange]);
+
   // Toggle gamut visibility
   const toggleGamut = useCallback((gamut: GamutType) => {
     setEnabledGamuts((prev) =>
@@ -256,15 +261,16 @@ function App() {
               enabledGamuts={enabledGamuts}
               snapshots={snapshots}
               onShiftChange={handleDiagramDrag}
+              onWavelengthShift={handleWavelengthShift}
               hexColor={chromaticity.hexColor}
               spectrum={spectrum}
               shiftNm={shiftNm}
             />
           </div>
 
-          {/* Drag hint */}
+          {/* Interaction hints */}
           <p className="text-center text-[10px] text-gray-600 mt-2">
-            Drag the spectrum ridge on the locus to shift wavelength interactively
+            Drag ridge to shift wavelength | Scroll to zoom | Click and drag to pan
           </p>
         </main>
 

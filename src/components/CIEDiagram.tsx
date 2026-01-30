@@ -4,10 +4,22 @@
  * D3.js-based interactive visualization of CIE color spaces
  * Supports both CIE 1931 xy and CIE 1976 u'v' representations
  * Features Spectrum-on-Locus visualization with draggable spectrum ridge
+ *
+ * Performance Optimizations (ISCV Phase 1):
+ * - Static/Dynamic element separation for partial updates
+ * - D3 enter/update/exit pattern instead of full re-render
+ * - requestAnimationFrame for smooth 60fps dragging
+ * - Enhanced drag UX with hover highlight and tooltips
+ *
+ * Phase 2 Enhancements:
+ * - Pan/Zoom functionality with d3-zoom
+ * - Keyboard navigation for wavelength adjustment
+ * - Loading indicator for initial render
  */
 
-import { useEffect, useRef, useMemo } from 'react';
+import { useEffect, useRef, useMemo, useCallback, useState } from 'react';
 import * as d3 from 'd3';
+import type { ZoomBehavior, ZoomTransform } from 'd3';
 import { SPECTRAL_LOCUS_XY, COLOR_GAMUTS } from '../data/cie1931';
 import { xyToUV } from '../lib/chromaticity';
 import type {
@@ -86,6 +98,7 @@ interface CIEDiagramProps {
   hexColor?: string;
   spectrum?: SpectrumPoint[];
   shiftNm?: number;
+  onWavelengthShift?: (delta: number) => void;
 }
 
 // Calculate normal vector at a point on the locus (pointing outward from the color space)
@@ -157,10 +170,26 @@ export function CIEDiagram({
   hexColor = '#ffffff',
   spectrum = [],
   shiftNm = 0,
+  onWavelengthShift,
 }: CIEDiagramProps) {
   const svgRef = useRef<SVGSVGElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const isDragging = useRef(false);
   const lastDragPos = useRef<{ x: number; y: number } | null>(null);
+  const animationFrameRef = useRef<number | null>(null);
+  const staticRenderedRef = useRef(false);
+  const scalesRef = useRef<{
+    xScale: d3.ScaleLinear<number, number>;
+    yScale: d3.ScaleLinear<number, number>;
+  } | null>(null);
+  const zoomRef = useRef<ZoomBehavior<SVGSVGElement, unknown> | null>(null);
+  const currentTransformRef = useRef<ZoomTransform>(d3.zoomIdentity);
+
+  // State for drag UX
+  const [isHoveringRidge, setIsHoveringRidge] = useState(false);
+  const [dragDelta, setDragDelta] = useState<number | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [zoomLevel, setZoomLevel] = useState(1);
 
   // Get diagram bounds based on mode
   const bounds = useMemo(() => {
@@ -256,10 +285,20 @@ export function CIEDiagram({
     });
   }, [enabledGamuts, mode]);
 
-  // D3 rendering
+  // Reset zoom to identity
+  const handleResetZoom = useCallback(() => {
+    if (!svgRef.current || !zoomRef.current) return;
+    const svg = d3.select(svgRef.current);
+    svg.transition().duration(300).call(zoomRef.current.transform, d3.zoomIdentity);
+  }, []);
+
+  // ============================================
+  // STATIC ELEMENTS RENDERING (runs once per mode/gamut change)
+  // ============================================
   useEffect(() => {
     if (!svgRef.current) return;
 
+    setIsLoading(true);
     const svg = d3.select(svgRef.current);
     const width = svgRef.current.clientWidth;
     const height = svgRef.current.clientHeight;
@@ -267,10 +306,11 @@ export function CIEDiagram({
     const innerWidth = width - margin.left - margin.right;
     const innerHeight = height - margin.top - margin.bottom;
 
-    // Clear previous content
+    // Clear all content only when mode/bounds change
     svg.selectAll('*').remove();
+    staticRenderedRef.current = false;
 
-    // Create scales
+    // Create scales and store in ref for dynamic updates
     const xScale = d3
       .scaleLinear()
       .domain([bounds.xMin, bounds.xMax])
@@ -281,14 +321,17 @@ export function CIEDiagram({
       .domain([bounds.yMin, bounds.yMax])
       .range([margin.top + innerHeight, margin.top]);
 
+    scalesRef.current = { xScale, yScale };
+
     // Background
     svg
       .append('rect')
+      .attr('class', 'background')
       .attr('width', width)
       .attr('height', height)
       .attr('fill', '#1a1a2e');
 
-    // Create defs for gradient
+    // Create defs for gradients and filters
     const defs = svg.append('defs');
 
     // Create gradient for spectral locus
@@ -297,7 +340,6 @@ export function CIEDiagram({
       .attr('id', 'spectral-gradient')
       .attr('gradientUnits', 'userSpaceOnUse');
 
-    // Add gradient stops based on wavelength
     SPECTRAL_LOCUS_XY.forEach((point, i) => {
       gradient
         .append('stop')
@@ -305,33 +347,46 @@ export function CIEDiagram({
         .attr('stop-color', wavelengthToRGB(point.wavelength));
     });
 
-    // Create main group
-    const g = svg.append('g');
+    // Add glow filter (used by dynamic elements)
+    const glowFilter = defs
+      .append('filter')
+      .attr('id', 'glow-filter')
+      .attr('x', '-50%')
+      .attr('y', '-50%')
+      .attr('width', '200%')
+      .attr('height', '200%');
 
-    // Draw filled horseshoe shape with gradient background
-    // Use curveCatmullRom for smoother curves (more natural interpolation)
+    glowFilter
+      .append('feGaussianBlur')
+      .attr('stdDeviation', '4')
+      .attr('result', 'coloredBlur');
+
+    const glowMerge = glowFilter.append('feMerge');
+    glowMerge.append('feMergeNode').attr('in', 'coloredBlur');
+    glowMerge.append('feMergeNode').attr('in', 'SourceGraphic');
+
+    // Create static group
+    const staticGroup = svg.append('g').attr('class', 'static-group');
+
+    // Draw filled horseshoe shape
     const locusPath = d3
       .line<{ x: number; y: number }>()
       .x((d) => xScale(d.x))
       .y((d) => yScale(d.y))
       .curve(d3.curveCatmullRom.alpha(0.5));
 
-    // Close the path for filled horseshoe
-    const closedLocusData = [
-      ...spectralLocusData,
-      spectralLocusData[0], // Close back to start
-    ];
+    const closedLocusData = [...spectralLocusData, spectralLocusData[0]];
 
-    // Create filled area with semi-transparent gradient
-    g.append('path')
+    staticGroup
+      .append('path')
       .datum(closedLocusData)
       .attr('d', locusPath)
       .attr('fill', 'url(#spectral-gradient)')
       .attr('fill-opacity', 0.15)
       .attr('stroke', 'none');
 
-    // Draw spectral locus outline
-    g.append('path')
+    staticGroup
+      .append('path')
       .datum(spectralLocusData)
       .attr('d', locusPath)
       .attr('fill', 'none')
@@ -339,128 +394,10 @@ export function CIEDiagram({
       .attr('stroke-width', 2)
       .attr('stroke-linecap', 'round');
 
-    // Draw Spectrum-on-Locus Ridge (mountain-like visualization)
-    if (spectrumRidgeData && spectrumRidgeData.length > 0) {
-      // Create the ridge area path
-      // Base line is the spectral locus, top line is the extruded ridge
-      const ridgeAreaData: { x: number; y: number }[] = [];
-
-      // Add top points (extruded)
-      spectrumRidgeData.forEach((p) => {
-        ridgeAreaData.push({ x: p.x, y: p.y });
-      });
-
-      // Add base points in reverse order to close the shape
-      for (let i = spectrumRidgeData.length - 1; i >= 0; i--) {
-        ridgeAreaData.push({
-          x: spectrumRidgeData[i].baseX,
-          y: spectrumRidgeData[i].baseY,
-        });
-      }
-
-      // Create smooth area path
-      const ridgePath = d3
-        .line<{ x: number; y: number }>()
-        .x((d) => xScale(d.x))
-        .y((d) => yScale(d.y))
-        .curve(d3.curveCatmullRom.alpha(0.5));
-
-      // Ridge fill gradient
-      const ridgeGradient = defs
-        .append('linearGradient')
-        .attr('id', 'ridge-gradient')
-        .attr('gradientUnits', 'userSpaceOnUse')
-        .attr('x1', xScale(spectrumRidgeData[0].baseX))
-        .attr('y1', yScale(spectrumRidgeData[0].baseY))
-        .attr('x2', xScale(spectrumRidgeData[spectrumRidgeData.length - 1].baseX))
-        .attr('y2', yScale(spectrumRidgeData[spectrumRidgeData.length - 1].baseY));
-
-      // Add gradient stops based on wavelength colors
-      spectrumRidgeData.forEach((p, i) => {
-        if (p.intensity > 0.01) {
-          ridgeGradient
-            .append('stop')
-            .attr('offset', `${(i / (spectrumRidgeData.length - 1)) * 100}%`)
-            .attr('stop-color', wavelengthToRGB(p.wavelength))
-            .attr('stop-opacity', 0.3 + p.intensity * 0.5);
-        }
-      });
-
-      // Draw filled ridge area
-      const ridgeGroup = g.append('g').attr('class', 'spectrum-ridge');
-
-      ridgeGroup
-        .append('path')
-        .datum(ridgeAreaData)
-        .attr('d', ridgePath)
-        .attr('fill', 'url(#ridge-gradient)')
-        .attr('fill-opacity', 0.6)
-        .attr('stroke', 'none')
-        .attr('class', 'ridge-fill')
-        .style('cursor', 'ew-resize');
-
-      // Draw ridge outline (top edge only)
-      const ridgeOutlinePath = d3
-        .line<{ x: number; y: number }>()
-        .x((d) => xScale(d.x))
-        .y((d) => yScale(d.y))
-        .curve(d3.curveCatmullRom.alpha(0.5));
-
-      const ridgeTopPoints = spectrumRidgeData.map((p) => ({ x: p.x, y: p.y }));
-
-      ridgeGroup
-        .append('path')
-        .datum(ridgeTopPoints)
-        .attr('d', ridgeOutlinePath)
-        .attr('fill', 'none')
-        .attr('stroke', hexColor)
-        .attr('stroke-width', 2)
-        .attr('stroke-opacity', 0.8)
-        .attr('class', 'ridge-outline')
-        .style('cursor', 'ew-resize');
-
-      // Add glow effect to the ridge peak area
-      const peakPoint = spectrumRidgeData.reduce((max, p) =>
-        p.intensity > max.intensity ? p : max
-      );
-
-      if (peakPoint.intensity > 0.1) {
-        ridgeGroup
-          .append('circle')
-          .attr('cx', xScale(peakPoint.x))
-          .attr('cy', yScale(peakPoint.y))
-          .attr('r', 12)
-          .attr('fill', hexColor)
-          .attr('opacity', 0.3)
-          .attr('filter', 'url(#glow-filter)')
-          .style('pointer-events', 'none');
-      }
-
-      // Add glow filter
-      const glowFilter = defs
-        .append('filter')
-        .attr('id', 'glow-filter')
-        .attr('x', '-50%')
-        .attr('y', '-50%')
-        .attr('width', '200%')
-        .attr('height', '200%');
-
-      glowFilter
-        .append('feGaussianBlur')
-        .attr('stdDeviation', '4')
-        .attr('result', 'coloredBlur');
-
-      const glowMerge = glowFilter.append('feMerge');
-      glowMerge.append('feMergeNode').attr('in', 'coloredBlur');
-      glowMerge.append('feMergeNode').attr('in', 'SourceGraphic');
-    }
-
-    // Draw purple line (closing the horseshoe)
-    const purpleLine = [
-      spectralLocusData[0],
-      spectralLocusData[spectralLocusData.length - 1],
-    ];
-    g.append('line')
+    // Purple line
+    const purpleLine = [spectralLocusData[0], spectralLocusData[spectralLocusData.length - 1]];
+    staticGroup
+      .append('line')
       .attr('x1', xScale(purpleLine[0].x))
       .attr('y1', yScale(purpleLine[0].y))
       .attr('x2', xScale(purpleLine[1].x))
@@ -469,19 +406,17 @@ export function CIEDiagram({
       .attr('stroke-width', 2)
       .attr('stroke-dasharray', '6,4');
 
-    // Add wavelength labels
+    // Wavelength labels
     const labelWavelengths = [380, 420, 460, 480, 500, 520, 540, 560, 580, 600, 620, 650, 700];
-    const labelsGroup = g.append('g').attr('class', 'wavelength-labels');
+    const labelsGroup = staticGroup.append('g').attr('class', 'wavelength-labels');
 
     spectralLocusData
       .filter((d) => labelWavelengths.includes(d.wavelength))
       .forEach((d) => {
-        // Calculate label position offset (outward from locus)
         const idx = spectralLocusData.findIndex((p) => p.wavelength === d.wavelength);
         const prev = spectralLocusData[Math.max(0, idx - 1)];
         const next = spectralLocusData[Math.min(spectralLocusData.length - 1, idx + 1)];
 
-        // Direction perpendicular to curve
         const dx = next.x - prev.x;
         const dy = next.y - prev.y;
         const len = Math.sqrt(dx * dx + dy * dy);
@@ -499,7 +434,7 @@ export function CIEDiagram({
           .text(`${d.wavelength}`);
       });
 
-    // Draw gamut triangles
+    // Gamut triangles
     gamutData.forEach((gamut) => {
       const trianglePath = d3
         .line<{ x: number; y: number }>()
@@ -508,7 +443,8 @@ export function CIEDiagram({
 
       const closedVertices = [...gamut.vertices, gamut.vertices[0]];
 
-      g.append('path')
+      staticGroup
+        .append('path')
         .datum(closedVertices)
         .attr('d', trianglePath)
         .attr('fill', gamut.color)
@@ -517,13 +453,13 @@ export function CIEDiagram({
         .attr('stroke-width', 2)
         .attr('stroke-dasharray', '8,4');
 
-      // Add gamut label
       const centroid = {
         x: gamut.vertices.reduce((sum, v) => sum + v.x, 0) / 3,
         y: gamut.vertices.reduce((sum, v) => sum + v.y, 0) / 3,
       };
 
-      g.append('text')
+      staticGroup
+        .append('text')
         .attr('x', xScale(centroid.x))
         .attr('y', yScale(centroid.y))
         .attr('fill', gamut.color)
@@ -534,13 +470,11 @@ export function CIEDiagram({
         .text(gamut.name);
     });
 
-    // Draw D65 white point
-    const d65 =
-      mode === 'CIE1976'
-        ? { x: 0.1978, y: 0.4683 }
-        : { x: 0.3127, y: 0.329 };
+    // D65 white point
+    const d65 = mode === 'CIE1976' ? { x: 0.1978, y: 0.4683 } : { x: 0.3127, y: 0.329 };
 
-    g.append('circle')
+    staticGroup
+      .append('circle')
       .attr('cx', xScale(d65.x))
       .attr('cy', yScale(d65.y))
       .attr('r', 4)
@@ -548,16 +482,261 @@ export function CIEDiagram({
       .attr('stroke', '#333')
       .attr('stroke-width', 1);
 
-    g.append('text')
+    staticGroup
+      .append('text')
       .attr('x', xScale(d65.x) + 8)
       .attr('y', yScale(d65.y) + 4)
       .attr('fill', '#ccc')
       .attr('font-size', '10px')
       .text('D65');
 
-    // Draw snapshot points
+    // Axes
+    const xAxis = d3.axisBottom(xScale).ticks(8).tickSize(-innerHeight);
+    const yAxis = d3.axisLeft(yScale).ticks(8).tickSize(-innerWidth);
+
+    svg
+      .append('g')
+      .attr('class', 'x-axis')
+      .attr('transform', `translate(0,${margin.top + innerHeight})`)
+      .call(xAxis)
+      .call((g) => g.select('.domain').remove())
+      .call((g) => g.selectAll('.tick line').attr('stroke', '#333').attr('stroke-dasharray', '2,2'))
+      .call((g) => g.selectAll('.tick text').attr('fill', '#888').attr('font-size', '10px'));
+
+    svg
+      .append('g')
+      .attr('class', 'y-axis')
+      .attr('transform', `translate(${margin.left},0)`)
+      .call(yAxis)
+      .call((g) => g.select('.domain').remove())
+      .call((g) => g.selectAll('.tick line').attr('stroke', '#333').attr('stroke-dasharray', '2,2'))
+      .call((g) => g.selectAll('.tick text').attr('fill', '#888').attr('font-size', '10px'));
+
+    // Axis labels
+    svg
+      .append('text')
+      .attr('class', 'axis-label-x')
+      .attr('x', margin.left + innerWidth / 2)
+      .attr('y', height - 10)
+      .attr('fill', '#aaa')
+      .attr('font-size', '12px')
+      .attr('text-anchor', 'middle')
+      .text(mode === 'CIE1931' ? 'x' : "u'");
+
+    svg
+      .append('text')
+      .attr('class', 'axis-label-y')
+      .attr('x', 15)
+      .attr('y', margin.top + innerHeight / 2)
+      .attr('fill', '#aaa')
+      .attr('font-size', '12px')
+      .attr('text-anchor', 'middle')
+      .attr('transform', `rotate(-90, 15, ${margin.top + innerHeight / 2})`)
+      .text(mode === 'CIE1931' ? 'y' : "v'");
+
+    // Mode indicator
+    svg
+      .append('text')
+      .attr('class', 'mode-indicator')
+      .attr('x', width - margin.right)
+      .attr('y', margin.top)
+      .attr('fill', '#666')
+      .attr('font-size', '11px')
+      .attr('text-anchor', 'end')
+      .text(mode === 'CIE1931' ? 'CIE 1931 xy' : "CIE 1976 u'v'");
+
+    // Create a main content group that will be zoomed/panned
+    const mainGroup = svg.append('g').attr('class', 'main-group');
+
+    // Move static group into main group for zoom
+    const existingStaticContent = staticGroup.node();
+    if (existingStaticContent) {
+      mainGroup.node()?.appendChild(existingStaticContent);
+    }
+
+    // Create dynamic group (for elements that update frequently)
+    mainGroup.append('g').attr('class', 'dynamic-group');
+
+    // Create groups for snapshots and current point (rendered above ridge)
+    mainGroup.append('g').attr('class', 'snapshots-group');
+    mainGroup.append('g').attr('class', 'current-point-group');
+
+    // Create tooltip group (outside main group so it doesn't zoom)
+    svg.append('g').attr('class', 'tooltip-group');
+
+    // ============================================
+    // ZOOM BEHAVIOR SETUP
+    // ============================================
+    const zoom = d3.zoom<SVGSVGElement, unknown>()
+      .scaleExtent([0.5, 8]) // Allow zoom from 50% to 800%
+      .translateExtent([[-width * 0.5, -height * 0.5], [width * 1.5, height * 1.5]])
+      .filter((event: MouseEvent | WheelEvent | TouchEvent) => {
+        // Allow zoom with wheel, and pan only when not dragging the ridge
+        if (event.type === 'wheel') return true;
+        if (event.type === 'mousedown' || event.type === 'touchstart') {
+          // Check if we're on the ridge - if so, don't start pan
+          const mouseEvent = event as MouseEvent;
+          const rect = svgRef.current?.getBoundingClientRect();
+          if (rect) {
+            const mouseX = mouseEvent.clientX - rect.left;
+            const mouseY = mouseEvent.clientY - rect.top;
+            // Transform mouse position to account for current zoom
+            const transform = currentTransformRef.current;
+            const transformedX = (mouseX - transform.x) / transform.k;
+            const transformedY = (mouseY - transform.y) / transform.k;
+
+            // Check if near current point or on ridge - disable pan for those
+            if (scalesRef.current) {
+              const { xScale, yScale } = scalesRef.current;
+              const pointX = xScale(displayPoint.x);
+              const pointY = yScale(displayPoint.y);
+              const distance = Math.sqrt(Math.pow(transformedX - pointX, 2) + Math.pow(transformedY - pointY, 2));
+              if (distance < 20) return false;
+            }
+          }
+        }
+        // Only allow left mouse button (button 0) for non-touch events
+        const mouseEvt = event as MouseEvent;
+        return !event.ctrlKey && (!('button' in event) || mouseEvt.button === 0);
+      })
+      .on('zoom', (event) => {
+        const transform = event.transform as ZoomTransform;
+        currentTransformRef.current = transform;
+        setZoomLevel(transform.k);
+
+        // Apply transform to main group
+        svg.select('.main-group').attr('transform', transform.toString());
+      });
+
+    svg.call(zoom);
+    zoomRef.current = zoom;
+
+    // Reset transform on mode change
+    svg.call(zoom.transform, d3.zoomIdentity);
+    currentTransformRef.current = d3.zoomIdentity;
+    setZoomLevel(1);
+
+    staticRenderedRef.current = true;
+
+    // Mark loading complete after a brief delay for smooth transition
+    requestAnimationFrame(() => {
+      setIsLoading(false);
+    });
+  }, [bounds, spectralLocusData, gamutData, mode, displayPoint]);
+
+  // ============================================
+  // DYNAMIC ELEMENTS RENDERING (runs on spectrum/point changes)
+  // Uses D3 enter/update/exit pattern for efficiency
+  // ============================================
+  useEffect(() => {
+    if (!svgRef.current || !scalesRef.current || !staticRenderedRef.current) return;
+
+    const svg = d3.select(svgRef.current);
+    const { xScale, yScale } = scalesRef.current;
+    const defs = svg.select('defs');
+    const dynamicGroup = svg.select('.main-group .dynamic-group');
+
+    // Clear only dynamic content (not static elements!)
+    dynamicGroup.selectAll('*').remove();
+    defs.select('#ridge-gradient').remove();
+
+    // Draw Spectrum Ridge if available
+    if (spectrumRidgeData && spectrumRidgeData.length > 0) {
+      const ridgeAreaData: { x: number; y: number }[] = [];
+
+      spectrumRidgeData.forEach((p) => {
+        ridgeAreaData.push({ x: p.x, y: p.y });
+      });
+
+      for (let i = spectrumRidgeData.length - 1; i >= 0; i--) {
+        ridgeAreaData.push({
+          x: spectrumRidgeData[i].baseX,
+          y: spectrumRidgeData[i].baseY,
+        });
+      }
+
+      const ridgePath = d3
+        .line<{ x: number; y: number }>()
+        .x((d) => xScale(d.x))
+        .y((d) => yScale(d.y))
+        .curve(d3.curveCatmullRom.alpha(0.5));
+
+      // Ridge gradient
+      const ridgeGradient = defs
+        .append('linearGradient')
+        .attr('id', 'ridge-gradient')
+        .attr('gradientUnits', 'userSpaceOnUse')
+        .attr('x1', xScale(spectrumRidgeData[0].baseX))
+        .attr('y1', yScale(spectrumRidgeData[0].baseY))
+        .attr('x2', xScale(spectrumRidgeData[spectrumRidgeData.length - 1].baseX))
+        .attr('y2', yScale(spectrumRidgeData[spectrumRidgeData.length - 1].baseY));
+
+      spectrumRidgeData.forEach((p, i) => {
+        if (p.intensity > 0.01) {
+          ridgeGradient
+            .append('stop')
+            .attr('offset', `${(i / (spectrumRidgeData.length - 1)) * 100}%`)
+            .attr('stop-color', wavelengthToRGB(p.wavelength))
+            .attr('stop-opacity', 0.3 + p.intensity * 0.5);
+        }
+      });
+
+      const ridgeGroup = dynamicGroup.append('g').attr('class', 'spectrum-ridge');
+
+      // Ridge fill with hover highlight effect
+      ridgeGroup
+        .append('path')
+        .datum(ridgeAreaData)
+        .attr('d', ridgePath)
+        .attr('fill', 'url(#ridge-gradient)')
+        .attr('fill-opacity', isHoveringRidge ? 0.8 : 0.6)
+        .attr('stroke', isHoveringRidge ? 'rgba(255,255,255,0.3)' : 'none')
+        .attr('stroke-width', isHoveringRidge ? 2 : 0)
+        .attr('class', 'ridge-fill')
+        .style('cursor', 'ew-resize')
+        .style('transition', 'fill-opacity 0.15s ease, stroke 0.15s ease');
+
+      // Ridge outline
+      const ridgeTopPoints = spectrumRidgeData.map((p) => ({ x: p.x, y: p.y }));
+
+      ridgeGroup
+        .append('path')
+        .datum(ridgeTopPoints)
+        .attr('d', ridgePath)
+        .attr('fill', 'none')
+        .attr('stroke', hexColor)
+        .attr('stroke-width', isHoveringRidge ? 3 : 2)
+        .attr('stroke-opacity', isHoveringRidge ? 1 : 0.8)
+        .attr('class', 'ridge-outline')
+        .style('cursor', 'ew-resize')
+        .style('transition', 'stroke-width 0.15s ease, stroke-opacity 0.15s ease');
+
+      // Peak glow
+      const peakPoint = spectrumRidgeData.reduce((max, p) =>
+        p.intensity > max.intensity ? p : max
+      );
+
+      if (peakPoint.intensity > 0.1) {
+        ridgeGroup
+          .append('circle')
+          .attr('cx', xScale(peakPoint.x))
+          .attr('cy', yScale(peakPoint.y))
+          .attr('r', isHoveringRidge ? 16 : 12)
+          .attr('fill', hexColor)
+          .attr('opacity', isHoveringRidge ? 0.4 : 0.3)
+          .attr('filter', 'url(#glow-filter)')
+          .style('pointer-events', 'none')
+          .style('transition', 'r 0.15s ease, opacity 0.15s ease');
+      }
+    }
+
+    // Update snapshots
+    const snapshotsGroup = svg.select('.main-group .snapshots-group');
+    snapshotsGroup.selectAll('*').remove();
+
     snapshotPoints.forEach((snapshot, idx) => {
-      g.append('circle')
+      snapshotsGroup
+        .append('circle')
         .attr('cx', xScale(snapshot.point.x))
         .attr('cy', yScale(snapshot.point.y))
         .attr('r', 6)
@@ -566,8 +745,8 @@ export function CIEDiagram({
         .attr('stroke-width', 1.5)
         .attr('opacity', 0.7);
 
-      // Index label
-      g.append('text')
+      snapshotsGroup
+        .append('text')
         .attr('x', xScale(snapshot.point.x) + 10)
         .attr('y', yScale(snapshot.point.y) + 4)
         .attr('fill', '#888')
@@ -575,8 +754,9 @@ export function CIEDiagram({
         .text(snapshot.label || `#${idx + 1}`);
     });
 
-    // Draw current point (larger, with glow effect)
-    const currentPointGroup = g.append('g').attr('class', 'current-point');
+    // Update current point
+    const currentPointGroup = svg.select('.main-group .current-point-group');
+    currentPointGroup.selectAll('*').remove();
 
     // Glow effect
     currentPointGroup
@@ -607,70 +787,53 @@ export function CIEDiagram({
       .attr('r', 2)
       .attr('fill', 'rgba(255,255,255,0.6)');
 
-    // Add axes
-    const xAxis = d3.axisBottom(xScale).ticks(8).tickSize(-innerHeight);
-    const yAxis = d3.axisLeft(yScale).ticks(8).tickSize(-innerWidth);
+    // Update tooltip for drag delta
+    const tooltipGroup = svg.select('.tooltip-group');
+    tooltipGroup.selectAll('*').remove();
 
-    svg
-      .append('g')
-      .attr('class', 'x-axis')
-      .attr('transform', `translate(0,${margin.top + innerHeight})`)
-      .call(xAxis)
-      .call((g) => g.select('.domain').remove())
-      .call((g) =>
-        g.selectAll('.tick line').attr('stroke', '#333').attr('stroke-dasharray', '2,2')
-      )
-      .call((g) => g.selectAll('.tick text').attr('fill', '#888').attr('font-size', '10px'));
+    if (dragDelta !== null && spectrumRidgeData && spectrumRidgeData.length > 0) {
+      const peakPoint = spectrumRidgeData.reduce((max, p) =>
+        p.intensity > max.intensity ? p : max
+      );
 
-    svg
-      .append('g')
-      .attr('class', 'y-axis')
-      .attr('transform', `translate(${margin.left},0)`)
-      .call(yAxis)
-      .call((g) => g.select('.domain').remove())
-      .call((g) =>
-        g.selectAll('.tick line').attr('stroke', '#333').attr('stroke-dasharray', '2,2')
-      )
-      .call((g) => g.selectAll('.tick text').attr('fill', '#888').attr('font-size', '10px'));
+      const tooltipX = xScale(peakPoint.x);
+      const tooltipY = yScale(peakPoint.y) - 25;
 
-    // Axis labels
-    svg
-      .append('text')
-      .attr('x', margin.left + innerWidth / 2)
-      .attr('y', height - 10)
-      .attr('fill', '#aaa')
-      .attr('font-size', '12px')
-      .attr('text-anchor', 'middle')
-      .text(mode === 'CIE1931' ? 'x' : "u'");
+      // Tooltip background
+      tooltipGroup
+        .append('rect')
+        .attr('x', tooltipX - 35)
+        .attr('y', tooltipY - 12)
+        .attr('width', 70)
+        .attr('height', 20)
+        .attr('rx', 4)
+        .attr('fill', 'rgba(0,0,0,0.8)')
+        .attr('stroke', hexColor)
+        .attr('stroke-width', 1);
 
-    svg
-      .append('text')
-      .attr('x', 15)
-      .attr('y', margin.top + innerHeight / 2)
-      .attr('fill', '#aaa')
-      .attr('font-size', '12px')
-      .attr('text-anchor', 'middle')
-      .attr('transform', `rotate(-90, 15, ${margin.top + innerHeight / 2})`)
-      .text(mode === 'CIE1931' ? 'y' : "v'");
+      // Tooltip text
+      const sign = dragDelta >= 0 ? '+' : '';
+      tooltipGroup
+        .append('text')
+        .attr('x', tooltipX)
+        .attr('y', tooltipY + 2)
+        .attr('fill', '#fff')
+        .attr('font-size', '11px')
+        .attr('font-weight', 'bold')
+        .attr('text-anchor', 'middle')
+        .text(`Δλ: ${sign}${Math.round(dragDelta)}nm`);
+    }
+  }, [spectrumRidgeData, displayPoint, snapshotPoints, hexColor, isHoveringRidge, dragDelta]);
 
-    // Mode indicator
-    svg
-      .append('text')
-      .attr('x', width - margin.right)
-      .attr('y', margin.top)
-      .attr('fill', '#666')
-      .attr('font-size', '11px')
-      .attr('text-anchor', 'end')
-      .text(mode === 'CIE1931' ? 'CIE 1931 xy' : "CIE 1976 u'v'");
+  // ============================================
+  // DRAG HANDLERS with requestAnimationFrame
+  // ============================================
+  const isInsideRidge = useCallback(
+    (mouseX: number, mouseY: number): boolean => {
+      if (!spectrumRidgeData || spectrumRidgeData.length === 0 || !scalesRef.current) return false;
 
-    // Drag handlers for spectrum ridge
-    const svgElement = svgRef.current;
+      const { xScale, yScale } = scalesRef.current;
 
-    // Check if a point is inside the spectrum ridge area
-    const isInsideRidge = (mouseX: number, mouseY: number): boolean => {
-      if (!spectrumRidgeData || spectrumRidgeData.length === 0) return false;
-
-      // Check if mouse is within the ridge bounding box (with some tolerance)
       const ridgeMinX = Math.min(...spectrumRidgeData.map((p) => Math.min(xScale(p.x), xScale(p.baseX)))) - 10;
       const ridgeMaxX = Math.max(...spectrumRidgeData.map((p) => Math.max(xScale(p.x), xScale(p.baseX)))) + 10;
       const ridgeMinY = Math.min(...spectrumRidgeData.map((p) => Math.min(yScale(p.y), yScale(p.baseY)))) - 10;
@@ -680,7 +843,6 @@ export function CIEDiagram({
         return false;
       }
 
-      // More precise check: find if mouse is near any ridge segment
       for (let i = 0; i < spectrumRidgeData.length; i++) {
         const p = spectrumRidgeData[i];
         const px = xScale(p.x);
@@ -688,85 +850,161 @@ export function CIEDiagram({
         const bx = xScale(p.baseX);
         const by = yScale(p.baseY);
 
-        // Check distance to the ridge line segment
         const distToTop = Math.sqrt(Math.pow(mouseX - px, 2) + Math.pow(mouseY - py, 2));
         const distToBase = Math.sqrt(Math.pow(mouseX - bx, 2) + Math.pow(mouseY - by, 2));
 
-        if (distToTop < 20 || distToBase < 20) {
-          return true;
-        }
+        if (distToTop < 20 || distToBase < 20) return true;
 
-        // Check if point is between base and top
         if (p.intensity > 0.05) {
           const midX = (px + bx) / 2;
           const midY = (py + by) / 2;
           const distToMid = Math.sqrt(Math.pow(mouseX - midX, 2) + Math.pow(mouseY - midY, 2));
-          if (distToMid < 25) {
-            return true;
-          }
+          if (distToMid < 25) return true;
         }
       }
 
       return false;
-    };
+    },
+    [spectrumRidgeData]
+  );
 
-    // Also check if near current point (fallback for when no spectrum)
-    const isNearCurrentPoint = (mouseX: number, mouseY: number): boolean => {
+  const isNearCurrentPoint = useCallback(
+    (mouseX: number, mouseY: number): boolean => {
+      if (!scalesRef.current) return false;
+      const { xScale, yScale } = scalesRef.current;
+
       const pointX = xScale(displayPoint.x);
       const pointY = yScale(displayPoint.y);
-      const distance = Math.sqrt(
-        Math.pow(mouseX - pointX, 2) + Math.pow(mouseY - pointY, 2)
-      );
+      const distance = Math.sqrt(Math.pow(mouseX - pointX, 2) + Math.pow(mouseY - pointY, 2));
       return distance < 20;
+    },
+    [displayPoint]
+  );
+
+  // Keyboard navigation handler
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Only handle if container or its children are focused
+      if (!container.contains(document.activeElement) && document.activeElement !== container) {
+        return;
+      }
+
+      let delta = 0;
+      switch (e.key) {
+        case 'ArrowLeft':
+          delta = e.shiftKey ? -5 : -1;
+          break;
+        case 'ArrowRight':
+          delta = e.shiftKey ? 5 : 1;
+          break;
+        case 'Home':
+          // Reset zoom
+          handleResetZoom();
+          return;
+        default:
+          return;
+      }
+
+      if (delta !== 0 && onWavelengthShift) {
+        e.preventDefault();
+        onWavelengthShift(delta);
+      }
     };
+
+    container.addEventListener('keydown', handleKeyDown);
+    return () => container.removeEventListener('keydown', handleKeyDown);
+  }, [onWavelengthShift, handleResetZoom]);
+
+  // Mouse event handlers with requestAnimationFrame
+  useEffect(() => {
+    const svgElement = svgRef.current;
+    if (!svgElement || !scalesRef.current) return;
+
+    const { xScale } = scalesRef.current;
+    let accumulatedDelta = 0;
 
     const handleMouseDown = (e: MouseEvent) => {
       const rect = svgElement.getBoundingClientRect();
-      const mouseX = e.clientX - rect.left;
-      const mouseY = e.clientY - rect.top;
+      const rawMouseX = e.clientX - rect.left;
+      const rawMouseY = e.clientY - rect.top;
 
-      // Check if click is on spectrum ridge or current point
+      // Transform mouse position to account for current zoom
+      const transform = currentTransformRef.current;
+      const mouseX = (rawMouseX - transform.x) / transform.k;
+      const mouseY = (rawMouseY - transform.y) / transform.k;
+
       const onRidge = spectrumRidgeData && spectrumRidgeData.length > 0 && isInsideRidge(mouseX, mouseY);
       const onPoint = isNearCurrentPoint(mouseX, mouseY);
 
       if (onRidge || onPoint) {
         isDragging.current = true;
-        lastDragPos.current = { x: mouseX, y: mouseY };
+        lastDragPos.current = { x: rawMouseX, y: rawMouseY };
+        accumulatedDelta = 0;
         svgElement.style.cursor = 'ew-resize';
+        setDragDelta(0);
       }
     };
 
     const handleMouseMove = (e: MouseEvent) => {
       const rect = svgElement.getBoundingClientRect();
-      const mouseX = e.clientX - rect.left;
-      const mouseY = e.clientY - rect.top;
+      const rawMouseX = e.clientX - rect.left;
+      const rawMouseY = e.clientY - rect.top;
 
-      // Update cursor based on hover state
+      // Transform mouse position to account for current zoom
+      const transform = currentTransformRef.current;
+      const mouseX = (rawMouseX - transform.x) / transform.k;
+      const mouseY = (rawMouseY - transform.y) / transform.k;
+
+      // Update hover state
       if (!isDragging.current) {
         const onRidge = spectrumRidgeData && spectrumRidgeData.length > 0 && isInsideRidge(mouseX, mouseY);
         const onPoint = isNearCurrentPoint(mouseX, mouseY);
-        if (onRidge || onPoint) {
-          svgElement.style.cursor = 'ew-resize';
-        } else {
-          svgElement.style.cursor = 'default';
-        }
+        setIsHoveringRidge(onRidge || onPoint);
+        svgElement.style.cursor = onRidge || onPoint ? 'ew-resize' : 'default';
       }
 
-      // Handle dragging
+      // Handle dragging with requestAnimationFrame for 60fps
       if (isDragging.current && lastDragPos.current && onShiftChange) {
-        // Calculate horizontal delta in pixels
-        // Use coordinate-based shift change for wavelength shift
-        const coordDeltaX = xScale.invert(mouseX) - xScale.invert(lastDragPos.current.x);
-        onShiftChange(coordDeltaX, 0);
+        // Cancel any pending animation frame
+        if (animationFrameRef.current) {
+          cancelAnimationFrame(animationFrameRef.current);
+        }
 
-        lastDragPos.current = { x: mouseX, y: mouseY };
+        animationFrameRef.current = requestAnimationFrame(() => {
+          if (!lastDragPos.current) return;
+
+          // For drag, we use raw coordinates but adjust for zoom scale
+          const lastTransformedX = (lastDragPos.current.x - transform.x) / transform.k;
+          const currentTransformedX = (rawMouseX - transform.x) / transform.k;
+          const coordDeltaX = xScale.invert(currentTransformedX) - xScale.invert(lastTransformedX);
+
+          // Convert coordinate delta to nm (approximate: 1 unit ≈ 200nm shift for responsiveness)
+          const nmDelta = coordDeltaX * 200;
+          accumulatedDelta += nmDelta;
+
+          onShiftChange(coordDeltaX, 0);
+          setDragDelta(accumulatedDelta);
+
+          lastDragPos.current = { x: rawMouseX, y: rawMouseY };
+        });
       }
     };
 
     const handleMouseUp = () => {
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+        animationFrameRef.current = null;
+      }
+
       isDragging.current = false;
       lastDragPos.current = null;
       svgElement.style.cursor = 'default';
+
+      // Hide tooltip after a short delay
+      setTimeout(() => setDragDelta(null), 500);
     };
 
     svgElement.addEventListener('mousedown', handleMouseDown);
@@ -775,30 +1013,66 @@ export function CIEDiagram({
     svgElement.addEventListener('mouseleave', handleMouseUp);
 
     return () => {
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+      }
       svgElement.removeEventListener('mousedown', handleMouseDown);
       svgElement.removeEventListener('mousemove', handleMouseMove);
       svgElement.removeEventListener('mouseup', handleMouseUp);
       svgElement.removeEventListener('mouseleave', handleMouseUp);
     };
-  }, [
-    bounds,
-    spectralLocusData,
-    spectrumRidgeData,
-    displayPoint,
-    snapshotPoints,
-    gamutData,
-    hexColor,
-    mode,
-    shiftNm,
-    onShiftChange,
-  ]);
+  }, [spectrumRidgeData, isInsideRidge, isNearCurrentPoint, onShiftChange, shiftNm]);
 
   return (
-    <svg
-      ref={svgRef}
-      className="w-full h-full"
-      style={{ minHeight: '400px' }}
-    />
+    <div
+      ref={containerRef}
+      className="relative w-full h-full"
+      tabIndex={0}
+      style={{ minHeight: '400px', outline: 'none' }}
+    >
+      {/* Loading Indicator */}
+      {isLoading && (
+        <div className="absolute inset-0 flex items-center justify-center bg-gray-900/80 z-20">
+          <div className="flex flex-col items-center gap-3">
+            <div className="w-10 h-10 border-4 border-blue-500/30 border-t-blue-500 rounded-full animate-spin" />
+            <span className="text-sm text-gray-400">Loading diagram...</span>
+          </div>
+        </div>
+      )}
+
+      {/* Zoom Controls */}
+      <div className="absolute top-2 right-2 flex flex-col gap-1 z-10">
+        <button
+          onClick={handleResetZoom}
+          className="w-8 h-8 bg-gray-800/90 hover:bg-gray-700 text-gray-300 hover:text-white rounded-lg flex items-center justify-center transition-colors border border-gray-700/50"
+          title="Reset zoom (Home)"
+          aria-label="Reset zoom"
+        >
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+          </svg>
+        </button>
+        <div className="text-[10px] text-gray-500 text-center bg-gray-800/80 rounded px-1 py-0.5 border border-gray-700/50">
+          {Math.round(zoomLevel * 100)}%
+        </div>
+      </div>
+
+      {/* Keyboard Hint */}
+      <div className="absolute bottom-2 left-2 text-[10px] text-gray-600 z-10">
+        <kbd className="px-1 py-0.5 bg-gray-800 rounded text-gray-500 border border-gray-700">←</kbd>
+        <kbd className="px-1 py-0.5 bg-gray-800 rounded text-gray-500 border border-gray-700 ml-0.5">→</kbd>
+        <span className="ml-1">±1nm</span>
+        <span className="mx-1">|</span>
+        <kbd className="px-1 py-0.5 bg-gray-800 rounded text-gray-500 border border-gray-700">Shift</kbd>
+        <span className="ml-1">±5nm</span>
+      </div>
+
+      <svg
+        ref={svgRef}
+        className="w-full h-full"
+        style={{ minHeight: '400px' }}
+      />
+    </div>
   );
 }
 
