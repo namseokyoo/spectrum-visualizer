@@ -38,31 +38,31 @@ export function generateGaussianSpectrum(
 /**
  * Preset: Blue OLED emission spectrum
  * Typical blue emitter (e.g., Ir complex)
- * Peak: ~470nm, FWHM: ~40nm
+ * Peak: ~470nm, FWHM: ~10nm (narrow)
  */
-export const PRESET_BLUE: SpectrumPoint[] = generateGaussianSpectrum(470, 40);
+export const PRESET_BLUE: SpectrumPoint[] = generateGaussianSpectrum(470, 10);
 
 /**
  * Preset: Green OLED emission spectrum
  * Typical green emitter
- * Peak: ~530nm, FWHM: ~50nm
+ * Peak: ~530nm, FWHM: ~12nm (narrow)
  */
-export const PRESET_GREEN: SpectrumPoint[] = generateGaussianSpectrum(530, 50);
+export const PRESET_GREEN: SpectrumPoint[] = generateGaussianSpectrum(530, 12);
 
 /**
  * Preset: Red OLED emission spectrum
  * Typical red emitter
- * Peak: ~620nm, FWHM: ~50nm
+ * Peak: ~620nm, FWHM: ~12nm (narrow)
  */
-export const PRESET_RED: SpectrumPoint[] = generateGaussianSpectrum(620, 50);
+export const PRESET_RED: SpectrumPoint[] = generateGaussianSpectrum(620, 12);
 
 /**
  * Preset: White LED spectrum (approximation)
- * Blue peak + phosphor-converted yellow
+ * Blue peak + phosphor-converted yellow (narrow version)
  */
 export function generateWhiteSpectrum(): SpectrumPoint[] {
-  const blue = generateGaussianSpectrum(450, 25);
-  const yellow = generateGaussianSpectrum(570, 80);
+  const blue = generateGaussianSpectrum(450, 6);
+  const yellow = generateGaussianSpectrum(570, 20);
 
   return blue.map((point, index) => ({
     wavelength: point.wavelength,
