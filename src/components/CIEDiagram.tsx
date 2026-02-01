@@ -631,50 +631,207 @@ export function CIEDiagram({
   }, []);
 
   // Handle axis range apply from modal
+  // Independent axis scaling: directly modify scale domains instead of using d3-zoom transform
   const handleAxisRangeApply = useCallback((axis: 'x' | 'y', min: number, max: number) => {
-    if (!svgRef.current || !baseScalesRef.current || !zoomRef.current) return;
+    if (!svgRef.current || !scalesRef.current || !baseScalesRef.current) return;
 
     const svg = d3.select(svgRef.current);
-    const { xScale: baseX, yScale: baseY } = baseScalesRef.current;
+    const width = svgRef.current.clientWidth;
+    const height = svgRef.current.clientHeight;
     const margin = { top: 30, right: 30, bottom: 50, left: 50 };
+    const innerWidth = width - margin.left - margin.right;
+    const innerHeight = height - margin.top - margin.bottom;
 
-    // Calculate new transform based on the requested range
-    // We need to compute scale factor and translation
-    const baseXDomain = baseX.domain();
-    const baseYDomain = baseY.domain();
-    const baseYRange = baseY.range();
-
-    // Get current transform or use identity
-    const currentTransform = currentTransformRef.current;
+    // Copy current scales
+    const currentXScale = scalesRef.current.xScale.copy();
+    const currentYScale = scalesRef.current.yScale.copy();
 
     if (axis === 'x') {
-      // Calculate new scale factor for X axis
-      const baseXWidth = baseXDomain[1] - baseXDomain[0];
-      const newXWidth = max - min;
-      const kx = baseXWidth / newXWidth;
-
-      // Calculate translation to position the new range at the viewport
-      const tx = margin.left - baseX(min) * kx;
-
-      // For independent axis scaling, we approximate with a uniform scale
-      // D3 zoom uses uniform scaling, so we take the X scale as primary
-      const newTransform = d3.zoomIdentity.translate(tx, currentTransform.y).scale(kx);
-
-      svg.transition().duration(300).call(zoomRef.current.transform, newTransform);
+      // Only change X axis domain, keep Y axis unchanged
+      currentXScale.domain([min, max]);
     } else {
-      // Calculate new scale factor for Y axis
-      const baseYHeight = baseYDomain[1] - baseYDomain[0];
-      const newYHeight = max - min;
-      const ky = baseYHeight / newYHeight;
+      // Only change Y axis domain, keep X axis unchanged
+      currentYScale.domain([min, max]);
+    }
 
-      // Y axis is inverted (range goes from bottom to top in screen space)
-      // baseYRange[0] is bottom (larger screen y), baseYRange[1] is top (smaller screen y)
-      const ty = baseYRange[1] - baseY(max) * ky;
+    // Update scales reference
+    scalesRef.current = { xScale: currentXScale, yScale: currentYScale };
 
-      // For Y axis, we use Y scale as primary
-      const newTransform = d3.zoomIdentity.translate(currentTransform.x, ty).scale(ky);
+    // Update axes with transition
+    const xAxisGroup = svg.select<SVGGElement>('.x-axis');
+    const yAxisGroup = svg.select<SVGGElement>('.y-axis');
 
-      svg.transition().duration(300).call(zoomRef.current.transform, newTransform);
+    const xAxis = d3.axisBottom(currentXScale).ticks(8).tickSize(-innerHeight);
+    const yAxis = d3.axisLeft(currentYScale).ticks(8).tickSize(-innerWidth);
+
+    xAxisGroup
+      .transition()
+      .duration(300)
+      .call(xAxis)
+      .call((g) => g.select('.domain').remove())
+      .call((g) => g.selectAll('.tick line').attr('stroke', themeColors.gridLine).attr('stroke-dasharray', '2,2'))
+      .call((g) => g.selectAll('.tick text').attr('fill', themeColors.axisText).attr('font-size', '10px'));
+
+    yAxisGroup
+      .transition()
+      .duration(300)
+      .call(yAxis)
+      .call((g) => g.select('.domain').remove())
+      .call((g) => g.selectAll('.tick line').attr('stroke', themeColors.gridLine).attr('stroke-dasharray', '2,2'))
+      .call((g) => g.selectAll('.tick text').attr('fill', themeColors.axisText).attr('font-size', '10px'));
+
+    // Update static elements with new scales
+    const updateStaticElementsForAxisChange = () => {
+      const staticGroup = svg.select('.main-group .static-group');
+
+      // Update spectral locus paths
+      const locusPath = d3
+        .line<{ x: number; y: number }>()
+        .x((d) => currentXScale(d.x))
+        .y((d) => currentYScale(d.y))
+        .curve(d3.curveCatmullRom.alpha(0.5));
+
+      // Generate high-resolution locus for smooth boundary rendering
+      const highResLocus = generateHighResolutionLocus(spectralLocusData, 1);
+      const closedLocusData = [...highResLocus, highResLocus[0]];
+
+      // Update filled horseshoe path and outline
+      const allPaths = staticGroup.selectAll('path').nodes() as SVGPathElement[];
+      allPaths.forEach((pathEl, i) => {
+        const path = d3.select(pathEl);
+        if (i === 0) {
+          path.datum(closedLocusData).transition().duration(300).attr('d', locusPath);
+        } else if (i === 1) {
+          path.datum(highResLocus).transition().duration(300).attr('d', locusPath);
+        }
+      });
+
+      // Update purple line
+      const purpleLine = [spectralLocusData[0], spectralLocusData[spectralLocusData.length - 1]];
+      staticGroup.select('line')
+        .transition()
+        .duration(300)
+        .attr('x1', currentXScale(purpleLine[0].x))
+        .attr('y1', currentYScale(purpleLine[0].y))
+        .attr('x2', currentXScale(purpleLine[1].x))
+        .attr('y2', currentYScale(purpleLine[1].y));
+
+      // Update wavelength labels
+      const wavelengthLabels = staticGroup.select('.wavelength-labels').selectAll('text').nodes() as SVGTextElement[];
+      wavelengthLabels.forEach((textEl) => {
+        const text = d3.select(textEl);
+        const wavelengthText = text.text();
+        const wavelength = parseInt(wavelengthText);
+
+        const point = spectralLocusData.find((p) => p.wavelength === wavelength);
+        if (point) {
+          const idx = spectralLocusData.findIndex((p) => p.wavelength === wavelength);
+          const prev = spectralLocusData[Math.max(0, idx - 1)];
+          const next = spectralLocusData[Math.min(spectralLocusData.length - 1, idx + 1)];
+
+          const dx = next.x - prev.x;
+          const dy = next.y - prev.y;
+          const len = Math.sqrt(dx * dx + dy * dy);
+          const offsetX = (-dy / len) * 0.04;
+          const offsetY = (dx / len) * 0.04;
+
+          text
+            .transition()
+            .duration(300)
+            .attr('x', currentXScale(point.x + offsetX))
+            .attr('y', currentYScale(point.y + offsetY));
+        }
+      });
+
+      // Update gamut triangles
+      let gamutIndex = 0;
+      gamutData.forEach((gamut) => {
+        const trianglePath = d3
+          .line<{ x: number; y: number }>()
+          .x((d) => currentXScale(d.x))
+          .y((d) => currentYScale(d.y));
+
+        const closedVertices = [...gamut.vertices, gamut.vertices[0]];
+        const gamutPathIndex = 2 + gamutIndex;
+        if (allPaths[gamutPathIndex]) {
+          d3.select(allPaths[gamutPathIndex])
+            .datum(closedVertices)
+            .transition()
+            .duration(300)
+            .attr('d', trianglePath);
+        }
+
+        // Update centroid text
+        const centroid = {
+          x: gamut.vertices.reduce((sum, v) => sum + v.x, 0) / 3,
+          y: gamut.vertices.reduce((sum, v) => sum + v.y, 0) / 3,
+        };
+
+        const allTextNodes = staticGroup.selectAll('text').nodes() as SVGTextElement[];
+        allTextNodes.forEach((textNode) => {
+          const textEl = d3.select(textNode);
+          if (textEl.text() === gamut.name) {
+            textEl
+              .transition()
+              .duration(300)
+              .attr('x', currentXScale(centroid.x))
+              .attr('y', currentYScale(centroid.y));
+          }
+        });
+
+        gamutIndex++;
+      });
+
+      // Update D65 white point
+      const d65 = mode === 'CIE1976' ? { x: 0.1978, y: 0.4683 } : { x: 0.3127, y: 0.329 };
+      const circles = staticGroup.selectAll('circle').nodes() as SVGCircleElement[];
+      circles.forEach((circleEl) => {
+        const circle = d3.select(circleEl);
+        circle
+          .transition()
+          .duration(300)
+          .attr('cx', currentXScale(d65.x))
+          .attr('cy', currentYScale(d65.y));
+      });
+
+      // Update D65 label
+      const textNodes = staticGroup.selectAll('text').nodes() as SVGTextElement[];
+      textNodes.forEach((textNode) => {
+        const textEl = d3.select(textNode);
+        if (textEl.text() === 'D65') {
+          textEl
+            .transition()
+            .duration(300)
+            .attr('x', currentXScale(d65.x) + 8)
+            .attr('y', currentYScale(d65.y) + 4);
+        }
+      });
+    };
+
+    updateStaticElementsForAxisChange();
+
+    // Trigger re-render of dynamic elements
+    setTimeout(() => {
+      setZoomTrigger(prev => prev + 1);
+    }, 300);
+
+    // Calculate approximate zoom level for display (use the larger scale factor)
+    const baseXDomain = baseScalesRef.current.xScale.domain();
+    const baseYDomain = baseScalesRef.current.yScale.domain();
+    const xZoom = (baseXDomain[1] - baseXDomain[0]) / (max - min);
+    const yZoom = (baseYDomain[1] - baseYDomain[0]) / (currentYScale.domain()[1] - currentYScale.domain()[0]);
+
+    if (axis === 'x') {
+      setZoomLevel(xZoom);
+    } else {
+      setZoomLevel(yZoom);
+    }
+
+    // Notify parent of zoom/axis change
+    if (onZoomChange) {
+      // Since we're now using independent axis scaling, report an approximate transform
+      const avgZoom = (axis === 'x' ? xZoom : yZoom);
+      onZoomChange({ k: avgZoom, x: 0, y: 0 });
     }
 
     // Notify parent of custom axis range change
@@ -683,7 +840,7 @@ export function CIEDiagram({
       newRanges[axis] = { min, max };
       onAxisRangeChange(newRanges);
     }
-  }, [customAxisRanges, onAxisRangeChange]);
+  }, [customAxisRanges, onAxisRangeChange, spectralLocusData, gamutData, mode, themeColors, onZoomChange]);
 
   // Set loading state when dependencies change (before the main effect runs)
   // This is intentional for D3.js diagram initialization UX
@@ -1027,7 +1184,7 @@ export function CIEDiagram({
     // ============================================
     // Semantic Zoom: Instead of CSS transform, we rescale the axes and re-render elements
     const zoom = d3.zoom<SVGSVGElement, unknown>()
-      .scaleExtent([0.5, 8]) // Allow zoom from 50% to 800%
+      .scaleExtent([0.5, 50]) // Allow zoom from 50% to 5000%
       .translateExtent([[-width * 0.5, -height * 0.5], [width * 1.5, height * 1.5]])
       .filter((event: MouseEvent | WheelEvent | TouchEvent) => {
         // Allow zoom with wheel, and pan only when not dragging the ridge
