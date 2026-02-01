@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useEffect } from 'react';
 import { DataInput } from './components/DataInput';
 import { CIEDiagram } from './components/CIEDiagram';
 import { SnapshotList } from './components/SnapshotList';
@@ -9,13 +9,51 @@ import { useIsMobile } from './hooks/useMediaQuery';
 import { calculateChromaticity, shiftSpectrum, PRESET_GREEN } from './lib';
 import type { SpectrumPoint, ChromaticityResult, DiagramMode, GamutType } from './types/spectrum';
 
+// Session storage key and interface
+const SESSION_STORAGE_KEY = 'spectrum-visualizer-session';
+
+interface SessionState {
+  spectrum: SpectrumPoint[];
+  shiftNm: number;
+  diagramMode: DiagramMode;
+  enabledGamuts: GamutType[];
+  intensityScale: number;
+  zoomTransform: { k: number; x: number; y: number } | null;
+}
+
+// Load session from localStorage
+const loadSession = (): Partial<SessionState> => {
+  try {
+    const saved = localStorage.getItem(SESSION_STORAGE_KEY);
+    return saved ? JSON.parse(saved) : {};
+  } catch {
+    return {};
+  }
+};
+
 function App() {
   const { theme, toggleTheme } = useTheme();
   const isMobile = useIsMobile();
-  const [spectrum, setSpectrum] = useState<SpectrumPoint[]>(PRESET_GREEN);
-  const [shiftNm, setShiftNm] = useState(0);
-  const [diagramMode, setDiagramMode] = useState<DiagramMode>('CIE1931');
-  const [enabledGamuts, setEnabledGamuts] = useState<GamutType[]>(['sRGB']);
+
+  // Load saved session state
+  const savedSession = useMemo(() => loadSession(), []);
+
+  const [spectrum, setSpectrum] = useState<SpectrumPoint[]>(
+    savedSession.spectrum || PRESET_GREEN
+  );
+  const [shiftNm, setShiftNm] = useState(savedSession.shiftNm ?? 0);
+  const [diagramMode, setDiagramMode] = useState<DiagramMode>(
+    savedSession.diagramMode || 'CIE1931'
+  );
+  const [enabledGamuts, setEnabledGamuts] = useState<GamutType[]>(
+    savedSession.enabledGamuts || ['sRGB']
+  );
+  const [intensityScale, setIntensityScale] = useState(
+    savedSession.intensityScale ?? 1.0
+  );
+  const [zoomTransform, setZoomTransform] = useState<{ k: number; x: number; y: number } | null>(
+    savedSession.zoomTransform || null
+  );
 
   // Snapshot management
   const {
@@ -75,6 +113,35 @@ function App() {
     addSnapshot(shiftNm, chromaticity);
   }, [shiftNm, chromaticity, addSnapshot]);
 
+  // Save session state to localStorage
+  useEffect(() => {
+    const session: SessionState = {
+      spectrum,
+      shiftNm,
+      diagramMode,
+      enabledGamuts,
+      intensityScale,
+      zoomTransform,
+    };
+    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
+  }, [spectrum, shiftNm, diagramMode, enabledGamuts, intensityScale, zoomTransform]);
+
+  // Reset all settings
+  const handleResetAll = useCallback(() => {
+    localStorage.removeItem(SESSION_STORAGE_KEY);
+    setSpectrum(PRESET_GREEN);
+    setShiftNm(0);
+    setDiagramMode('CIE1931');
+    setEnabledGamuts(['sRGB']);
+    setIntensityScale(1.0);
+    setZoomTransform(null);
+  }, []);
+
+  // Handle zoom change from CIEDiagram
+  const handleZoomChange = useCallback((transform: { k: number; x: number; y: number }) => {
+    setZoomTransform(transform);
+  }, []);
+
   // Restore snapshot
   const handleRestoreSnapshot = useCallback((snapshot: { shiftNm: number }) => {
     setShiftNm(snapshot.shiftNm);
@@ -94,6 +161,13 @@ function App() {
             </p>
           </div>
           <div className="flex items-center gap-2 lg:gap-4 flex-shrink-0">
+            <button
+              onClick={handleResetAll}
+              className={`px-2 py-1 lg:px-3 lg:py-1.5 text-xs rounded-lg transition-colors ${theme === 'dark' ? 'bg-gray-700 hover:bg-gray-600 text-gray-300' : 'bg-gray-200 hover:bg-gray-300 text-gray-700'}`}
+              title="Reset all settings"
+            >
+              Reset All
+            </button>
             <button
               onClick={toggleTheme}
               className={`p-2 rounded-lg transition-colors touch-target ${theme === 'dark' ? 'bg-gray-700 hover:bg-gray-600 text-yellow-400' : 'bg-gray-200 hover:bg-gray-300 text-gray-700'}`}
@@ -172,6 +246,28 @@ function App() {
                 >
                   Reset
                 </button>
+              </div>
+
+              {/* Intensity Scale Control */}
+              <div className={`pt-3 mt-3 border-t ${theme === 'dark' ? 'border-gray-700/50' : 'border-gray-200'}`}>
+                <div className="flex items-center gap-2">
+                  <span className={`text-xs ${theme === 'dark' ? 'text-gray-500' : 'text-gray-600'}`}>Intensity:</span>
+                  <input
+                    type="range"
+                    min="0.1"
+                    max="2.0"
+                    step="0.1"
+                    value={intensityScale}
+                    onChange={(e) => setIntensityScale(parseFloat(e.target.value))}
+                    className="flex-1 h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-green-500"
+                    style={{
+                      background: `linear-gradient(to right, #22c55e 0%, #22c55e ${((intensityScale - 0.1) / 1.9) * 100}%, #374151 ${((intensityScale - 0.1) / 1.9) * 100}%, #374151 100%)`
+                    }}
+                  />
+                  <span className={`text-xs font-mono w-10 text-right ${theme === 'dark' ? 'text-gray-300' : 'text-gray-700'}`}>
+                    {intensityScale.toFixed(1)}x
+                  </span>
+                </div>
               </div>
             </div>
           </section>
@@ -291,6 +387,9 @@ function App() {
               spectrum={spectrum}
               shiftNm={shiftNm}
               theme={theme}
+              intensityScale={intensityScale}
+              initialZoomTransform={zoomTransform}
+              onZoomChange={handleZoomChange}
             />
           </div>
 
@@ -409,6 +508,9 @@ function App() {
           enabledGamuts={enabledGamuts}
           onToggleGamut={toggleGamut}
           theme={theme}
+          intensityScale={intensityScale}
+          onIntensityScaleChange={setIntensityScale}
+          onResetAll={handleResetAll}
         />
       )}
     </div>

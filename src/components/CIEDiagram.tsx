@@ -100,6 +100,9 @@ interface CIEDiagramProps {
   shiftNm?: number;
   onWavelengthShift?: (delta: number) => void;
   theme?: 'dark' | 'light';
+  intensityScale?: number;
+  initialZoomTransform?: { k: number; x: number; y: number } | null;
+  onZoomChange?: (transform: { k: number; x: number; y: number }) => void;
 }
 
 // Calculate normal vector at a point on the locus (pointing outward from the color space)
@@ -431,6 +434,9 @@ export function CIEDiagram({
   shiftNm = 0,
   onWavelengthShift,
   theme = 'dark',
+  intensityScale = 1.0,
+  initialZoomTransform,
+  onZoomChange,
 }: CIEDiagramProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -525,8 +531,8 @@ export function CIEDiagram({
       (p) => p.wavelength >= 380 && p.wavelength <= 700
     );
 
-    // Scale factor for ridge height (coordinate units)
-    const ridgeScale = mode === 'CIE1931' ? 0.08 : 0.06;
+    // Scale factor for ridge height (coordinate units) - apply intensityScale
+    const ridgeScale = (mode === 'CIE1931' ? 0.08 : 0.06) * intensityScale;
 
     // Calculate ridge points
     const ridgePoints: { x: number; y: number; baseX: number; baseY: number; wavelength: number; intensity: number }[] = [];
@@ -553,7 +559,7 @@ export function CIEDiagram({
     }
 
     return ridgePoints;
-  }, [highResLocusData, spectrum, shiftNm, mode]);
+  }, [highResLocusData, spectrum, shiftNm, mode, intensityScale]);
 
   // Current point in diagram coordinates
   const displayPoint = useMemo(() => {
@@ -938,6 +944,9 @@ export function CIEDiagram({
         currentTransformRef.current = transform;
         setZoomLevel(transform.k);
 
+        // Notify parent of zoom change for session persistence
+        onZoomChange?.({ k: transform.k, x: transform.x, y: transform.y });
+
         // Semantic Zoom: Rescale axes based on transform
         if (baseScalesRef.current) {
           const newXScale = transform.rescaleX(baseScalesRef.current.xScale);
@@ -1104,11 +1113,22 @@ export function CIEDiagram({
     svg.call(zoom);
     zoomRef.current = zoom;
 
-    // Reset transform on mode change
-    svg.call(zoom.transform, d3.zoomIdentity);
-    currentTransformRef.current = d3.zoomIdentity;
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setZoomLevel(1);
+    // Apply initial zoom transform if provided, otherwise reset
+    if (initialZoomTransform) {
+      const savedTransform = d3.zoomIdentity
+        .translate(initialZoomTransform.x, initialZoomTransform.y)
+        .scale(initialZoomTransform.k);
+      svg.call(zoom.transform, savedTransform);
+      currentTransformRef.current = savedTransform;
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setZoomLevel(initialZoomTransform.k);
+    } else {
+      // Reset transform on mode change
+      svg.call(zoom.transform, d3.zoomIdentity);
+      currentTransformRef.current = d3.zoomIdentity;
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setZoomLevel(1);
+    }
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setZoomTrigger(0);
 
@@ -1120,6 +1140,7 @@ export function CIEDiagram({
     });
   // Note: displayPoint is intentionally excluded from dependencies to preserve zoom state during wavelength shifts
   // displayPointRef is used in zoom filter instead
+  // initialZoomTransform and onZoomChange are also excluded to prevent re-render loops
   }, [bounds, spectralLocusData, gamutData, mode, theme, themeColors]);
 
   // ============================================
@@ -1233,8 +1254,8 @@ export function CIEDiagram({
             shiftNm
           );
 
-          // Calculate extrude distance (same scale as ridge)
-          const ridgeScale = mode === 'CIE1931' ? 0.08 : 0.06;
+          // Calculate extrude distance (same scale as ridge) - apply intensityScale
+          const ridgeScale = (mode === 'CIE1931' ? 0.08 : 0.06) * intensityScale;
           const extrudeDistance = preciseIntensity * ridgeScale;
 
           // Calculate peak position with extrude
@@ -1330,7 +1351,7 @@ export function CIEDiagram({
           preciseWavelength,
           shiftNm
         );
-        const ridgeScale = mode === 'CIE1931' ? 0.08 : 0.06;
+        const ridgeScale = (mode === 'CIE1931' ? 0.08 : 0.06) * intensityScale;
         const extrudeDistance = preciseIntensity * ridgeScale;
 
         const peakX = interpolatedPos.x + interpolatedPos.nx * extrudeDistance;
@@ -1364,7 +1385,7 @@ export function CIEDiagram({
           .text(`Δλ: ${sign}${Math.round(dragDelta)}nm`);
       }
     }
-  }, [spectrumRidgeData, displayPoint, snapshotPoints, hexColor, isHoveringRidge, dragDelta, spectrum, shiftNm, spectralLocusData, mode, themeColors, zoomTrigger]);
+  }, [spectrumRidgeData, displayPoint, snapshotPoints, hexColor, isHoveringRidge, dragDelta, spectrum, shiftNm, spectralLocusData, mode, themeColors, zoomTrigger, intensityScale]);
 
   // ============================================
   // DRAG HANDLERS with requestAnimationFrame

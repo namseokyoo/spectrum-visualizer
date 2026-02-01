@@ -20,6 +20,11 @@ interface MobileControlsProps {
   onToggleGamut: (gamut: GamutType) => void;
   // Theme
   theme?: 'dark' | 'light';
+  // Intensity scale
+  intensityScale?: number;
+  onIntensityScaleChange?: (value: number) => void;
+  // Reset all
+  onResetAll?: () => void;
 }
 
 type ControlTab = 'shift' | 'snapshot' | 'gamut' | 'info';
@@ -41,6 +46,9 @@ export function MobileControls({
   enabledGamuts,
   onToggleGamut,
   theme = 'dark',
+  intensityScale = 1.0,
+  onIntensityScaleChange,
+  onResetAll,
 }: MobileControlsProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<ControlTab>('shift');
@@ -166,6 +174,26 @@ export function MobileControls({
                   {delta === 0 ? 'Reset' : `${delta > 0 ? '+' : ''}${delta}`}
                 </button>
               ))}
+            </div>
+
+            {/* Intensity Scale */}
+            <div className={`p-3 rounded-lg ${inputBg} ${borderColor} border`}>
+              <div className="flex items-center justify-between mb-2">
+                <span className={mutedColor}>Intensity Scale</span>
+                <span className={`font-mono ${textColor}`}>{intensityScale.toFixed(1)}x</span>
+              </div>
+              <input
+                type="range"
+                min="0.1"
+                max="2.0"
+                step="0.1"
+                value={intensityScale}
+                onChange={(e) => onIntensityScaleChange?.(parseFloat(e.target.value))}
+                className="w-full h-8 accent-green-500 touch-target"
+                style={{
+                  background: `linear-gradient(to right, #22c55e 0%, #22c55e ${((intensityScale - 0.1) / 1.9) * 100}%, #374151 ${((intensityScale - 0.1) / 1.9) * 100}%, #374151 100%)`
+                }}
+              />
             </div>
 
             {/* Color Preview */}
@@ -334,6 +362,16 @@ export function MobileControls({
                 </div>
               </div>
             </div>
+
+            {/* Reset All Button */}
+            {onResetAll && (
+              <button
+                onClick={onResetAll}
+                className="w-full py-3 rounded-lg font-medium text-sm touch-target bg-red-600/20 text-red-400 active:bg-red-600/30 border border-red-600/30"
+              >
+                Reset All Settings
+              </button>
+            )}
           </div>
         )}
       </BottomSheet>
