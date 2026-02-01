@@ -99,6 +99,7 @@ interface CIEDiagramProps {
   spectrum?: SpectrumPoint[];
   shiftNm?: number;
   onWavelengthShift?: (delta: number) => void;
+  theme?: 'dark' | 'light';
 }
 
 // Calculate normal vector at a point on the locus (pointing outward from the color space)
@@ -429,6 +430,7 @@ export function CIEDiagram({
   spectrum = [],
   shiftNm = 0,
   onWavelengthShift,
+  theme = 'dark',
 }: CIEDiagramProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -448,6 +450,34 @@ export function CIEDiagram({
   const [dragDelta, setDragDelta] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [zoomLevel, setZoomLevel] = useState(1);
+
+  // Theme-based colors
+  const themeColors = useMemo(() => ({
+    bgPrimary: theme === 'dark' ? '#0f0f14' : '#ffffff',
+    bgSecondary: theme === 'dark' ? '#1a1a2e' : '#f5f5f5',
+    bgTertiary: theme === 'dark' ? '#1f1f3a' : '#e5e5e5',
+    textPrimary: theme === 'dark' ? '#fff' : '#1a1a2e',
+    textSecondary: theme === 'dark' ? 'rgba(255,255,255,0.7)' : 'rgba(0,0,0,0.7)',
+    textMuted: theme === 'dark' ? '#888' : '#666',
+    border: theme === 'dark' ? '#333' : '#e0e0e0',
+    borderLight: theme === 'dark' ? 'rgba(55,65,81,0.5)' : 'rgba(0,0,0,0.1)',
+    gridLine: theme === 'dark' ? '#333' : '#ccc',
+    axisText: theme === 'dark' ? '#888' : '#666',
+    labelText: theme === 'dark' ? '#aaa' : '#555',
+    d65Text: theme === 'dark' ? '#ccc' : '#444',
+    d65Stroke: theme === 'dark' ? '#333' : '#999',
+    snapshotLabel: theme === 'dark' ? '#888' : '#666',
+    loadingBg: theme === 'dark' ? 'bg-gray-900/80' : 'bg-white/80',
+    controlBg: theme === 'dark' ? 'bg-gray-800/90 hover:bg-gray-700' : 'bg-white/90 hover:bg-gray-100',
+    controlBorder: theme === 'dark' ? 'border-gray-700/50' : 'border-gray-300/50',
+    controlText: theme === 'dark' ? 'text-gray-300 hover:text-white' : 'text-gray-600 hover:text-gray-900',
+    kbdBg: theme === 'dark' ? 'bg-gray-800' : 'bg-gray-200',
+    kbdText: theme === 'dark' ? 'text-gray-500' : 'text-gray-600',
+    kbdBorder: theme === 'dark' ? 'border-gray-700' : 'border-gray-300',
+    hintText: theme === 'dark' ? 'text-gray-600' : 'text-gray-500',
+    spinnerBorder: theme === 'dark' ? 'border-blue-500/30' : 'border-blue-500/40',
+    spinnerText: theme === 'dark' ? 'text-gray-400' : 'text-gray-600',
+  }), [theme]);
 
   // Get diagram bounds based on mode
   const bounds = useMemo(() => {
@@ -556,13 +586,19 @@ export function CIEDiagram({
     svg.transition().duration(300).call(zoomRef.current.transform, d3.zoomIdentity);
   }, []);
 
+  // Set loading state when dependencies change (before the main effect runs)
+  // This is intentional for D3.js diagram initialization UX
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setIsLoading(true);
+  }, [bounds, mode]);
+
   // ============================================
   // STATIC ELEMENTS RENDERING (runs once per mode/gamut change)
   // ============================================
   useEffect(() => {
     if (!svgRef.current) return;
 
-    setIsLoading(true);
     const svg = d3.select(svgRef.current);
     const width = svgRef.current.clientWidth;
     const height = svgRef.current.clientHeight;
@@ -593,7 +629,7 @@ export function CIEDiagram({
       .attr('class', 'background')
       .attr('width', width)
       .attr('height', height)
-      .attr('fill', '#1a1a2e');
+      .attr('fill', themeColors.bgSecondary);
 
     // Create defs for gradients and filters
     const defs = svg.append('defs');
@@ -745,15 +781,15 @@ export function CIEDiagram({
       .attr('cx', xScale(d65.x))
       .attr('cy', yScale(d65.y))
       .attr('r', 4)
-      .attr('fill', 'white')
-      .attr('stroke', '#333')
+      .attr('fill', theme === 'dark' ? 'white' : '#333')
+      .attr('stroke', themeColors.d65Stroke)
       .attr('stroke-width', 1);
 
     staticGroup
       .append('text')
       .attr('x', xScale(d65.x) + 8)
       .attr('y', yScale(d65.y) + 4)
-      .attr('fill', '#ccc')
+      .attr('fill', themeColors.d65Text)
       .attr('font-size', '10px')
       .text('D65');
 
@@ -767,8 +803,8 @@ export function CIEDiagram({
       .attr('transform', `translate(0,${margin.top + innerHeight})`)
       .call(xAxis)
       .call((g) => g.select('.domain').remove())
-      .call((g) => g.selectAll('.tick line').attr('stroke', '#333').attr('stroke-dasharray', '2,2'))
-      .call((g) => g.selectAll('.tick text').attr('fill', '#888').attr('font-size', '10px'));
+      .call((g) => g.selectAll('.tick line').attr('stroke', themeColors.gridLine).attr('stroke-dasharray', '2,2'))
+      .call((g) => g.selectAll('.tick text').attr('fill', themeColors.axisText).attr('font-size', '10px'));
 
     svg
       .append('g')
@@ -776,8 +812,8 @@ export function CIEDiagram({
       .attr('transform', `translate(${margin.left},0)`)
       .call(yAxis)
       .call((g) => g.select('.domain').remove())
-      .call((g) => g.selectAll('.tick line').attr('stroke', '#333').attr('stroke-dasharray', '2,2'))
-      .call((g) => g.selectAll('.tick text').attr('fill', '#888').attr('font-size', '10px'));
+      .call((g) => g.selectAll('.tick line').attr('stroke', themeColors.gridLine).attr('stroke-dasharray', '2,2'))
+      .call((g) => g.selectAll('.tick text').attr('fill', themeColors.axisText).attr('font-size', '10px'));
 
     // Axis labels
     svg
@@ -785,7 +821,7 @@ export function CIEDiagram({
       .attr('class', 'axis-label-x')
       .attr('x', margin.left + innerWidth / 2)
       .attr('y', height - 10)
-      .attr('fill', '#aaa')
+      .attr('fill', themeColors.labelText)
       .attr('font-size', '12px')
       .attr('text-anchor', 'middle')
       .text(mode === 'CIE1931' ? 'x' : "u'");
@@ -795,7 +831,7 @@ export function CIEDiagram({
       .attr('class', 'axis-label-y')
       .attr('x', 15)
       .attr('y', margin.top + innerHeight / 2)
-      .attr('fill', '#aaa')
+      .attr('fill', themeColors.labelText)
       .attr('font-size', '12px')
       .attr('text-anchor', 'middle')
       .attr('transform', `rotate(-90, 15, ${margin.top + innerHeight / 2})`)
@@ -807,7 +843,7 @@ export function CIEDiagram({
       .attr('class', 'mode-indicator')
       .attr('x', width - margin.right)
       .attr('y', margin.top)
-      .attr('fill', '#666')
+      .attr('fill', themeColors.textMuted)
       .attr('font-size', '11px')
       .attr('text-anchor', 'end')
       .text(mode === 'CIE1931' ? 'CIE 1931 xy' : "CIE 1976 u'v'");
@@ -881,6 +917,7 @@ export function CIEDiagram({
     // Reset transform on mode change
     svg.call(zoom.transform, d3.zoomIdentity);
     currentTransformRef.current = d3.zoomIdentity;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setZoomLevel(1);
 
     staticRenderedRef.current = true;
@@ -889,7 +926,7 @@ export function CIEDiagram({
     requestAnimationFrame(() => {
       setIsLoading(false);
     });
-  }, [bounds, spectralLocusData, gamutData, mode, displayPoint]);
+  }, [bounds, spectralLocusData, gamutData, mode, displayPoint, theme, themeColors]);
 
   // ============================================
   // DYNAMIC ELEMENTS RENDERING (runs on spectrum/point changes)
@@ -1043,7 +1080,7 @@ export function CIEDiagram({
         .append('text')
         .attr('x', xScale(snapshot.point.x) + 10)
         .attr('y', yScale(snapshot.point.y) + 4)
-        .attr('fill', '#888')
+        .attr('fill', themeColors.snapshotLabel)
         .attr('font-size', '9px')
         .text(snapshot.label || `#${idx + 1}`);
     });
@@ -1133,7 +1170,7 @@ export function CIEDiagram({
           .text(`Δλ: ${sign}${Math.round(dragDelta)}nm`);
       }
     }
-  }, [spectrumRidgeData, displayPoint, snapshotPoints, hexColor, isHoveringRidge, dragDelta, spectrum, shiftNm, spectralLocusData, mode]);
+  }, [spectrumRidgeData, displayPoint, snapshotPoints, hexColor, isHoveringRidge, dragDelta, spectrum, shiftNm, spectralLocusData, mode, themeColors]);
 
   // ============================================
   // DRAG HANDLERS with requestAnimationFrame
@@ -1144,10 +1181,14 @@ export function CIEDiagram({
 
       const { xScale, yScale } = scalesRef.current;
 
-      const ridgeMinX = Math.min(...spectrumRidgeData.map((p) => Math.min(xScale(p.x), xScale(p.baseX)))) - 10;
-      const ridgeMaxX = Math.max(...spectrumRidgeData.map((p) => Math.max(xScale(p.x), xScale(p.baseX)))) + 10;
-      const ridgeMinY = Math.min(...spectrumRidgeData.map((p) => Math.min(yScale(p.y), yScale(p.baseY)))) - 10;
-      const ridgeMaxY = Math.max(...spectrumRidgeData.map((p) => Math.max(yScale(p.y), yScale(p.baseY)))) + 10;
+      // Larger touch targets for mobile (minimum 44px recommended)
+      const touchPadding = 22; // 44px / 2 for radius
+      const boundsPadding = 15;
+
+      const ridgeMinX = Math.min(...spectrumRidgeData.map((p) => Math.min(xScale(p.x), xScale(p.baseX)))) - boundsPadding;
+      const ridgeMaxX = Math.max(...spectrumRidgeData.map((p) => Math.max(xScale(p.x), xScale(p.baseX)))) + boundsPadding;
+      const ridgeMinY = Math.min(...spectrumRidgeData.map((p) => Math.min(yScale(p.y), yScale(p.baseY)))) - boundsPadding;
+      const ridgeMaxY = Math.max(...spectrumRidgeData.map((p) => Math.max(yScale(p.y), yScale(p.baseY)))) + boundsPadding;
 
       if (mouseX < ridgeMinX || mouseX > ridgeMaxX || mouseY < ridgeMinY || mouseY > ridgeMaxY) {
         return false;
@@ -1163,13 +1204,14 @@ export function CIEDiagram({
         const distToTop = Math.sqrt(Math.pow(mouseX - px, 2) + Math.pow(mouseY - py, 2));
         const distToBase = Math.sqrt(Math.pow(mouseX - bx, 2) + Math.pow(mouseY - by, 2));
 
-        if (distToTop < 20 || distToBase < 20) return true;
+        // Use larger touch targets
+        if (distToTop < touchPadding || distToBase < touchPadding) return true;
 
         if (p.intensity > 0.05) {
           const midX = (px + bx) / 2;
           const midY = (py + by) / 2;
           const distToMid = Math.sqrt(Math.pow(mouseX - midX, 2) + Math.pow(mouseY - midY, 2));
-          if (distToMid < 25) return true;
+          if (distToMid < touchPadding + 5) return true;
         }
       }
 
@@ -1186,7 +1228,8 @@ export function CIEDiagram({
       const pointX = xScale(displayPoint.x);
       const pointY = yScale(displayPoint.y);
       const distance = Math.sqrt(Math.pow(mouseX - pointX, 2) + Math.pow(mouseY - pointY, 2));
-      return distance < 20;
+      // Larger touch target for mobile (minimum 44px)
+      return distance < 22;
     },
     [displayPoint]
   );
@@ -1228,7 +1271,7 @@ export function CIEDiagram({
     return () => container.removeEventListener('keydown', handleKeyDown);
   }, [onWavelengthShift, handleResetZoom]);
 
-  // Mouse event handlers with requestAnimationFrame
+  // Mouse and Touch event handlers with requestAnimationFrame
   useEffect(() => {
     const svgElement = svgRef.current;
     if (!svgElement || !scalesRef.current) return;
@@ -1236,49 +1279,59 @@ export function CIEDiagram({
     const { xScale } = scalesRef.current;
     let accumulatedDelta = 0;
 
-    const handleMouseDown = (e: MouseEvent) => {
-      const rect = svgElement.getBoundingClientRect();
-      const rawMouseX = e.clientX - rect.left;
-      const rawMouseY = e.clientY - rect.top;
+    // Helper to get position from mouse or touch event
+    const getEventPosition = (e: MouseEvent | Touch, rect: DOMRect) => {
+      return {
+        rawX: e.clientX - rect.left,
+        rawY: e.clientY - rect.top,
+      };
+    };
 
-      // Transform mouse position to account for current zoom
+    // Helper to check if position is on draggable area
+    const checkDraggableArea = (rawX: number, rawY: number) => {
       const transform = currentTransformRef.current;
-      const mouseX = (rawMouseX - transform.x) / transform.k;
-      const mouseY = (rawMouseY - transform.y) / transform.k;
+      const mouseX = (rawX - transform.x) / transform.k;
+      const mouseY = (rawY - transform.y) / transform.k;
 
       const onRidge = spectrumRidgeData && spectrumRidgeData.length > 0 && isInsideRidge(mouseX, mouseY);
       const onPoint = isNearCurrentPoint(mouseX, mouseY);
 
+      return { onRidge, onPoint, mouseX, mouseY };
+    };
+
+    // Start drag (mouse or touch)
+    const startDrag = (rawX: number, rawY: number, e?: Event) => {
+      const { onRidge, onPoint } = checkDraggableArea(rawX, rawY);
+
       if (onRidge || onPoint) {
+        if (e) {
+          e.stopPropagation();
+          e.preventDefault();
+        }
+
         isDragging.current = true;
-        lastDragPos.current = { x: rawMouseX, y: rawMouseY };
+        lastDragPos.current = { x: rawX, y: rawY };
         accumulatedDelta = 0;
         svgElement.style.cursor = 'ew-resize';
         setDragDelta(0);
+        return true;
       }
+      return false;
     };
 
-    const handleMouseMove = (e: MouseEvent) => {
-      const rect = svgElement.getBoundingClientRect();
-      const rawMouseX = e.clientX - rect.left;
-      const rawMouseY = e.clientY - rect.top;
-
-      // Transform mouse position to account for current zoom
+    // Move during drag
+    const moveDrag = (rawX: number, rawY: number) => {
       const transform = currentTransformRef.current;
-      const mouseX = (rawMouseX - transform.x) / transform.k;
-      const mouseY = (rawMouseY - transform.y) / transform.k;
 
-      // Update hover state
+      // Update hover state (mouse only)
       if (!isDragging.current) {
-        const onRidge = spectrumRidgeData && spectrumRidgeData.length > 0 && isInsideRidge(mouseX, mouseY);
-        const onPoint = isNearCurrentPoint(mouseX, mouseY);
+        const { onRidge, onPoint } = checkDraggableArea(rawX, rawY);
         setIsHoveringRidge(onRidge || onPoint);
         svgElement.style.cursor = onRidge || onPoint ? 'ew-resize' : 'default';
       }
 
       // Handle dragging with requestAnimationFrame for 60fps
       if (isDragging.current && lastDragPos.current && onShiftChange) {
-        // Cancel any pending animation frame
         if (animationFrameRef.current) {
           cancelAnimationFrame(animationFrameRef.current);
         }
@@ -1286,24 +1339,23 @@ export function CIEDiagram({
         animationFrameRef.current = requestAnimationFrame(() => {
           if (!lastDragPos.current) return;
 
-          // For drag, we use raw coordinates but adjust for zoom scale
           const lastTransformedX = (lastDragPos.current.x - transform.x) / transform.k;
-          const currentTransformedX = (rawMouseX - transform.x) / transform.k;
+          const currentTransformedX = (rawX - transform.x) / transform.k;
           const coordDeltaX = xScale.invert(currentTransformedX) - xScale.invert(lastTransformedX);
 
-          // Convert coordinate delta to nm (approximate: 1 unit ≈ 200nm shift for responsiveness)
           const nmDelta = coordDeltaX * 200;
           accumulatedDelta += nmDelta;
 
           onShiftChange(coordDeltaX, 0);
           setDragDelta(accumulatedDelta);
 
-          lastDragPos.current = { x: rawMouseX, y: rawMouseY };
+          lastDragPos.current = { x: rawX, y: rawY };
         });
       }
     };
 
-    const handleMouseUp = () => {
+    // End drag
+    const endDrag = () => {
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current);
         animationFrameRef.current = null;
@@ -1313,14 +1365,68 @@ export function CIEDiagram({
       lastDragPos.current = null;
       svgElement.style.cursor = 'default';
 
-      // Hide tooltip after a short delay
       setTimeout(() => setDragDelta(null), 500);
     };
 
+    // Mouse event handlers
+    const handleMouseDown = (e: MouseEvent) => {
+      const rect = svgElement.getBoundingClientRect();
+      const { rawX, rawY } = getEventPosition(e, rect);
+      startDrag(rawX, rawY, e);
+    };
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const rect = svgElement.getBoundingClientRect();
+      const { rawX, rawY } = getEventPosition(e, rect);
+      moveDrag(rawX, rawY);
+    };
+
+    const handleMouseUp = () => {
+      endDrag();
+    };
+
+    // Touch event handlers
+    const handleTouchStart = (e: TouchEvent) => {
+      if (e.touches.length !== 1) return; // Single touch only for drag
+
+      const rect = svgElement.getBoundingClientRect();
+      const { rawX, rawY } = getEventPosition(e.touches[0], rect);
+
+      if (startDrag(rawX, rawY, e)) {
+        setIsHoveringRidge(true);
+      }
+    };
+
+    const handleTouchMove = (e: TouchEvent) => {
+      if (e.touches.length !== 1 || !isDragging.current) return;
+
+      const rect = svgElement.getBoundingClientRect();
+      const { rawX, rawY } = getEventPosition(e.touches[0], rect);
+
+      // Prevent scrolling when dragging on the ridge
+      if (isDragging.current) {
+        e.preventDefault();
+      }
+
+      moveDrag(rawX, rawY);
+    };
+
+    const handleTouchEnd = () => {
+      setIsHoveringRidge(false);
+      endDrag();
+    };
+
+    // Add event listeners
     svgElement.addEventListener('mousedown', handleMouseDown);
     svgElement.addEventListener('mousemove', handleMouseMove);
     svgElement.addEventListener('mouseup', handleMouseUp);
     svgElement.addEventListener('mouseleave', handleMouseUp);
+
+    // Touch events with passive: false to allow preventDefault
+    svgElement.addEventListener('touchstart', handleTouchStart, { passive: false });
+    svgElement.addEventListener('touchmove', handleTouchMove, { passive: false });
+    svgElement.addEventListener('touchend', handleTouchEnd);
+    svgElement.addEventListener('touchcancel', handleTouchEnd);
 
     return () => {
       if (animationFrameRef.current) {
@@ -1330,6 +1436,10 @@ export function CIEDiagram({
       svgElement.removeEventListener('mousemove', handleMouseMove);
       svgElement.removeEventListener('mouseup', handleMouseUp);
       svgElement.removeEventListener('mouseleave', handleMouseUp);
+      svgElement.removeEventListener('touchstart', handleTouchStart);
+      svgElement.removeEventListener('touchmove', handleTouchMove);
+      svgElement.removeEventListener('touchend', handleTouchEnd);
+      svgElement.removeEventListener('touchcancel', handleTouchEnd);
     };
   }, [spectrumRidgeData, isInsideRidge, isNearCurrentPoint, onShiftChange, shiftNm]);
 
@@ -1342,10 +1452,10 @@ export function CIEDiagram({
     >
       {/* Loading Indicator */}
       {isLoading && (
-        <div className="absolute inset-0 flex items-center justify-center bg-gray-900/80 z-20">
+        <div className={`absolute inset-0 flex items-center justify-center z-20 ${themeColors.loadingBg}`}>
           <div className="flex flex-col items-center gap-3">
-            <div className="w-10 h-10 border-4 border-blue-500/30 border-t-blue-500 rounded-full animate-spin" />
-            <span className="text-sm text-gray-400">Loading diagram...</span>
+            <div className={`w-10 h-10 border-4 ${themeColors.spinnerBorder} border-t-blue-500 rounded-full animate-spin`} />
+            <span className={`text-sm ${themeColors.spinnerText}`}>Loading diagram...</span>
           </div>
         </div>
       )}
@@ -1354,7 +1464,7 @@ export function CIEDiagram({
       <div className="absolute top-2 right-2 flex flex-col gap-1 z-10">
         <button
           onClick={handleResetZoom}
-          className="w-8 h-8 bg-gray-800/90 hover:bg-gray-700 text-gray-300 hover:text-white rounded-lg flex items-center justify-center transition-colors border border-gray-700/50"
+          className={`w-8 h-8 rounded-lg flex items-center justify-center transition-colors border ${themeColors.controlBg} ${themeColors.controlText} ${themeColors.controlBorder}`}
           title="Reset zoom (Home)"
           aria-label="Reset zoom"
         >
@@ -1362,18 +1472,18 @@ export function CIEDiagram({
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
           </svg>
         </button>
-        <div className="text-[10px] text-gray-500 text-center bg-gray-800/80 rounded px-1 py-0.5 border border-gray-700/50">
+        <div className={`text-[10px] text-center rounded px-1 py-0.5 border ${themeColors.controlBg} ${themeColors.controlBorder} ${themeColors.hintText}`}>
           {Math.round(zoomLevel * 100)}%
         </div>
       </div>
 
       {/* Keyboard Hint */}
-      <div className="absolute bottom-2 left-2 text-[10px] text-gray-600 z-10">
-        <kbd className="px-1 py-0.5 bg-gray-800 rounded text-gray-500 border border-gray-700">←</kbd>
-        <kbd className="px-1 py-0.5 bg-gray-800 rounded text-gray-500 border border-gray-700 ml-0.5">→</kbd>
+      <div className={`absolute bottom-2 left-2 text-[10px] z-10 ${themeColors.hintText}`}>
+        <kbd className={`px-1 py-0.5 rounded border ${themeColors.kbdBg} ${themeColors.kbdText} ${themeColors.kbdBorder}`}>←</kbd>
+        <kbd className={`px-1 py-0.5 rounded border ml-0.5 ${themeColors.kbdBg} ${themeColors.kbdText} ${themeColors.kbdBorder}`}>→</kbd>
         <span className="ml-1">±1nm</span>
         <span className="mx-1">|</span>
-        <kbd className="px-1 py-0.5 bg-gray-800 rounded text-gray-500 border border-gray-700">Shift</kbd>
+        <kbd className={`px-1 py-0.5 rounded border ${themeColors.kbdBg} ${themeColors.kbdText} ${themeColors.kbdBorder}`}>Shift</kbd>
         <span className="ml-1">±5nm</span>
       </div>
 
