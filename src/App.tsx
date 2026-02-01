@@ -278,7 +278,7 @@ function App() {
           </div>
 
           {/* CIE Diagram */}
-          <div className={`flex-1 rounded-xl overflow-hidden shadow-inner ${theme === 'dark' ? 'bg-gray-800/30 border border-gray-700/30' : 'bg-gray-100/50 border border-gray-200'}`}>
+          <div className={`flex-1 rounded-xl overflow-hidden shadow-inner ${isMobile ? 'aspect-square max-h-[70vh]' : ''} ${theme === 'dark' ? 'bg-gray-800/30 border border-gray-700/30' : 'bg-gray-100/50 border border-gray-200'}`}>
             <CIEDiagram
               currentPoint={chromaticity.cie1931}
               currentPointUV={chromaticity.cie1976}

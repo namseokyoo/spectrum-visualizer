@@ -647,6 +647,15 @@ export function CIEDiagram({
         .attr('stop-color', wavelengthToRGB(point.wavelength));
     });
 
+    // Add clip path for zoom/pan bounds (prevents content from overflowing into axis area)
+    defs.append('clipPath')
+      .attr('id', 'chart-clip')
+      .append('rect')
+      .attr('x', margin.left)
+      .attr('y', margin.top)
+      .attr('width', innerWidth)
+      .attr('height', innerHeight);
+
     // Add glow filter (used by dynamic elements)
     const glowFilter = defs
       .append('filter')
@@ -849,7 +858,10 @@ export function CIEDiagram({
       .text(mode === 'CIE1931' ? 'CIE 1931 xy' : "CIE 1976 u'v'");
 
     // Create a main content group that will be zoomed/panned
-    const mainGroup = svg.append('g').attr('class', 'main-group');
+    // Apply clip-path to prevent content from overflowing into axis area during zoom/pan
+    const mainGroup = svg.append('g')
+      .attr('class', 'main-group')
+      .attr('clip-path', 'url(#chart-clip)');
 
     // Move static group into main group for zoom
     const existingStaticContent = staticGroup.node();
