@@ -160,6 +160,264 @@ function getSpectrumIntensityAtWavelength(
   return 0;
 }
 
+/**
+ * Find the precise peak wavelength using parabolic interpolation
+ * This provides sub-nm precision for smooth peak tracking
+ */
+function findInterpolatedPeakWavelength(
+  spectrum: SpectrumPoint[],
+  shiftNm: number
+): number {
+  if (!spectrum || spectrum.length < 3) {
+    // Fallback: return center of visible spectrum
+    return 550;
+  }
+
+  // Find the index of maximum intensity in shifted spectrum
+  let maxIdx = 0;
+  let maxIntensity = -Infinity;
+
+  for (let i = 0; i < spectrum.length; i++) {
+    if (spectrum[i].intensity > maxIntensity) {
+      maxIntensity = spectrum[i].intensity;
+      maxIdx = i;
+    }
+  }
+
+  // If peak is at boundary, we can't do parabolic interpolation
+  if (maxIdx === 0 || maxIdx === spectrum.length - 1) {
+    return spectrum[maxIdx].wavelength + shiftNm;
+  }
+
+  // Parabolic interpolation using 3 points around the maximum
+  // For points (x0, y0), (x1, y1), (x2, y2) where y1 is max,
+  // the parabola vertex x = x1 + 0.5 * (y0 - y2) / (y0 - 2*y1 + y2)
+  const p0 = spectrum[maxIdx - 1];
+  const p1 = spectrum[maxIdx];
+  const p2 = spectrum[maxIdx + 1];
+
+  const y0 = p0.intensity;
+  const y1 = p1.intensity;
+  const y2 = p2.intensity;
+
+  const denominator = y0 - 2 * y1 + y2;
+
+  // Avoid division by zero (flat peak)
+  if (Math.abs(denominator) < 1e-10) {
+    return p1.wavelength + shiftNm;
+  }
+
+  // Calculate the fractional offset from the center point
+  const offset = 0.5 * (y0 - y2) / denominator;
+
+  // Clamp the offset to prevent extrapolation beyond neighbors
+  const clampedOffset = Math.max(-0.5, Math.min(0.5, offset));
+
+  // Interpolate wavelength
+  const wavelengthStep = p2.wavelength - p1.wavelength;
+  const preciseWavelength = p1.wavelength + clampedOffset * wavelengthStep;
+
+  // Apply shift to get the displayed wavelength
+  return preciseWavelength + shiftNm;
+}
+
+/**
+ * Calculate natural cubic spline coefficients
+ * Returns array of {a, b, c, d} for each segment
+ * Uses the Thomas algorithm for tridiagonal systems
+ */
+function calculateCubicSpline(
+  x: number[],
+  y: number[]
+): { a: number; b: number; c: number; d: number }[] {
+  const n = x.length - 1;
+  const h: number[] = [];
+  const alpha: number[] = [0]; // alpha[0] is unused, start from index 1
+  const l: number[] = [1];
+  const mu: number[] = [0];
+  const z: number[] = [0];
+  const c: number[] = new Array(n + 1);
+  const b: number[] = new Array(n);
+  const d: number[] = new Array(n);
+
+  // Step 1: Calculate h[i] = x[i+1] - x[i]
+  for (let i = 0; i < n; i++) {
+    h[i] = x[i + 1] - x[i];
+  }
+
+  // Step 2: Calculate alpha (second derivative approximations)
+  for (let i = 1; i < n; i++) {
+    alpha[i] = (3 / h[i]) * (y[i + 1] - y[i]) - (3 / h[i - 1]) * (y[i] - y[i - 1]);
+  }
+
+  // Step 3-4: Solve tridiagonal system using Thomas algorithm
+  for (let i = 1; i < n; i++) {
+    l[i] = 2 * (x[i + 1] - x[i - 1]) - h[i - 1] * mu[i - 1];
+    mu[i] = h[i] / l[i];
+    z[i] = (alpha[i] - h[i - 1] * z[i - 1]) / l[i];
+  }
+
+  // Step 5: Back substitution
+  l[n] = 1;
+  z[n] = 0;
+  c[n] = 0;
+
+  for (let j = n - 1; j >= 0; j--) {
+    c[j] = z[j] - mu[j] * c[j + 1];
+    b[j] = (y[j + 1] - y[j]) / h[j] - h[j] * (c[j + 1] + 2 * c[j]) / 3;
+    d[j] = (c[j + 1] - c[j]) / (3 * h[j]);
+  }
+
+  // Return coefficients for each segment
+  // S_i(t) = a + b*(t-x_i) + c*(t-x_i)^2 + d*(t-x_i)^3
+  const spline: { a: number; b: number; c: number; d: number }[] = [];
+  for (let i = 0; i < n; i++) {
+    spline.push({ a: y[i], b: b[i], c: c[i], d: d[i] });
+  }
+
+  return spline;
+}
+
+/**
+ * Evaluate cubic spline at a given point
+ * Uses binary search to find the correct segment for efficiency
+ */
+function evaluateSpline(
+  spline: { a: number; b: number; c: number; d: number }[],
+  x: number[],
+  t: number
+): number {
+  // Binary search to find the correct segment
+  let low = 0;
+  let high = x.length - 2;
+
+  while (low < high) {
+    const mid = Math.floor((low + high + 1) / 2);
+    if (x[mid] <= t) {
+      low = mid;
+    } else {
+      high = mid - 1;
+    }
+  }
+
+  const i = low;
+
+  // Clamp to valid range
+  if (i < 0 || i >= spline.length) {
+    return i < 0 ? spline[0].a : spline[spline.length - 1].a;
+  }
+
+  // Evaluate: S_i(t) = a + b*(t-x_i) + c*(t-x_i)^2 + d*(t-x_i)^3
+  const dx = t - x[i];
+  const { a, b, c, d } = spline[i];
+  return a + b * dx + c * dx * dx + d * dx * dx * dx;
+}
+
+/**
+ * Generate high-resolution locus data using cubic spline interpolation
+ * This creates truly smooth curves, not just more points on straight lines
+ */
+function generateHighResolutionLocus(
+  locusData: { wavelength: number; x: number; y: number }[],
+  stepNm: number = 1
+): { wavelength: number; x: number; y: number }[] {
+  if (locusData.length < 2) return locusData;
+
+  const n = locusData.length;
+  const wavelengths = locusData.map(p => p.wavelength);
+  const xValues = locusData.map(p => p.x);
+  const yValues = locusData.map(p => p.y);
+
+  // Calculate cubic spline coefficients for x and y separately
+  const splineX = calculateCubicSpline(wavelengths, xValues);
+  const splineY = calculateCubicSpline(wavelengths, yValues);
+
+  const result: { wavelength: number; x: number; y: number }[] = [];
+
+  // Generate interpolated points at stepNm intervals
+  for (let wl = wavelengths[0]; wl <= wavelengths[n - 1]; wl += stepNm) {
+    result.push({
+      wavelength: wl,
+      x: evaluateSpline(splineX, wavelengths, wl),
+      y: evaluateSpline(splineY, wavelengths, wl),
+    });
+  }
+
+  // Ensure the last point is included
+  const last = locusData[n - 1];
+  if (result.length === 0 || result[result.length - 1].wavelength !== last.wavelength) {
+    result.push({ wavelength: last.wavelength, x: last.x, y: last.y });
+  }
+
+  return result;
+}
+
+/**
+ * Interpolate position on the spectral locus for a given wavelength
+ * Returns the x, y coordinates with sub-point precision
+ */
+function interpolateLocusPosition(
+  wavelength: number,
+  locusData: { wavelength: number; x: number; y: number }[]
+): { x: number; y: number; nx: number; ny: number } | null {
+  if (!locusData || locusData.length < 2) return null;
+
+  // Find the two locus points that bracket this wavelength
+  for (let i = 0; i < locusData.length - 1; i++) {
+    const p1 = locusData[i];
+    const p2 = locusData[i + 1];
+
+    if (wavelength >= p1.wavelength && wavelength <= p2.wavelength) {
+      // Linear interpolation factor
+      const t = (wavelength - p1.wavelength) / (p2.wavelength - p1.wavelength);
+
+      // Interpolate position
+      const x = p1.x + t * (p2.x - p1.x);
+      const y = p1.y + t * (p2.y - p1.y);
+
+      // Calculate normal at this interpolated position
+      // Use adjacent points for tangent calculation
+
+      // Interpolate the normal as well for smooth direction
+      const { nx: nx1, ny: ny1 } = calculateNormal(
+        locusData[Math.max(0, i - 1)],
+        p1,
+        p2
+      );
+      const { nx: nx2, ny: ny2 } = calculateNormal(
+        p1,
+        p2,
+        locusData[Math.min(locusData.length - 1, i + 2)]
+      );
+
+      // Interpolate normals
+      let nx = nx1 + t * (nx2 - nx1);
+      let ny = ny1 + t * (ny2 - ny1);
+
+      // Normalize the interpolated normal
+      const len = Math.sqrt(nx * nx + ny * ny);
+      if (len > 0) {
+        nx /= len;
+        ny /= len;
+      }
+
+      return { x, y, nx, ny };
+    }
+  }
+
+  // Wavelength outside locus range - return closest endpoint
+  if (wavelength < locusData[0].wavelength) {
+    const p = locusData[0];
+    const { nx, ny } = calculateNormal(p, locusData[0], locusData[1]);
+    return { x: p.x, y: p.y, nx, ny };
+  } else {
+    const p = locusData[locusData.length - 1];
+    const len = locusData.length;
+    const { nx, ny } = calculateNormal(locusData[len - 2], locusData[len - 1], p);
+    return { x: p.x, y: p.y, nx, ny };
+  }
+}
+
 export function CIEDiagram({
   currentPoint,
   currentPointUV,
@@ -211,13 +469,19 @@ export function CIEDiagram({
     });
   }, [mode]);
 
+  // Generate high-resolution locus data (1nm intervals) for smooth ridge animation
+  const highResLocusData = useMemo(() => {
+    return generateHighResolutionLocus(spectralLocusData, 1);
+  }, [spectralLocusData]);
+
   // Calculate spectrum ridge data (Spectrum-on-Locus)
   // Each point on the locus gets extruded along its normal based on spectrum intensity
+  // Uses high-resolution (1nm) locus data for smooth animation
   const spectrumRidgeData = useMemo(() => {
     if (!spectrum || spectrum.length === 0) return null;
 
-    // Filter locus points to visible spectrum range (380-700nm for meaningful display)
-    const visibleLocus = spectralLocusData.filter(
+    // Filter high-res locus points to visible spectrum range (380-700nm for meaningful display)
+    const visibleLocus = highResLocusData.filter(
       (p) => p.wavelength >= 380 && p.wavelength <= 700
     );
 
@@ -249,7 +513,7 @@ export function CIEDiagram({
     }
 
     return ridgePoints;
-  }, [spectralLocusData, spectrum, shiftNm, mode]);
+  }, [highResLocusData, spectrum, shiftNm, mode]);
 
   // Current point in diagram coordinates
   const displayPoint = useMemo(() => {
@@ -368,6 +632,9 @@ export function CIEDiagram({
     // Create static group
     const staticGroup = svg.append('g').attr('class', 'static-group');
 
+    // Generate high-resolution locus for smooth boundary rendering
+    const highResLocus = generateHighResolutionLocus(spectralLocusData, 1);
+
     // Draw filled horseshoe shape
     const locusPath = d3
       .line<{ x: number; y: number }>()
@@ -375,7 +642,7 @@ export function CIEDiagram({
       .y((d) => yScale(d.y))
       .curve(d3.curveCatmullRom.alpha(0.5));
 
-    const closedLocusData = [...spectralLocusData, spectralLocusData[0]];
+    const closedLocusData = [...highResLocus, highResLocus[0]];
 
     staticGroup
       .append('path')
@@ -387,7 +654,7 @@ export function CIEDiagram({
 
     staticGroup
       .append('path')
-      .datum(spectralLocusData)
+      .datum(highResLocus)
       .attr('d', locusPath)
       .attr('fill', 'none')
       .attr('stroke', 'url(#spectral-gradient)')
@@ -659,7 +926,7 @@ export function CIEDiagram({
         .line<{ x: number; y: number }>()
         .x((d) => xScale(d.x))
         .y((d) => yScale(d.y))
-        .curve(d3.curveCatmullRom.alpha(0.5));
+        .curve(d3.curveBasis);
 
       // Ridge gradient
       const ridgeGradient = defs
@@ -711,22 +978,49 @@ export function CIEDiagram({
         .style('cursor', 'ew-resize')
         .style('transition', 'stroke-width 0.15s ease, stroke-opacity 0.15s ease');
 
-      // Peak glow
-      const peakPoint = spectrumRidgeData.reduce((max, p) =>
+      // Peak glow - use interpolated position for smooth movement
+      // Find the discrete peak for intensity threshold check
+      const discretePeakPoint = spectrumRidgeData.reduce((max, p) =>
         p.intensity > max.intensity ? p : max
       );
 
-      if (peakPoint.intensity > 0.1) {
-        ridgeGroup
-          .append('circle')
-          .attr('cx', xScale(peakPoint.x))
-          .attr('cy', yScale(peakPoint.y))
-          .attr('r', isHoveringRidge ? 16 : 12)
-          .attr('fill', hexColor)
-          .attr('opacity', isHoveringRidge ? 0.4 : 0.3)
-          .attr('filter', 'url(#glow-filter)')
-          .style('pointer-events', 'none')
-          .style('transition', 'r 0.15s ease, opacity 0.15s ease');
+      if (discretePeakPoint.intensity > 0.1 && spectrum && spectrum.length > 0) {
+        // Calculate precise peak wavelength using parabolic interpolation
+        const preciseWavelength = findInterpolatedPeakWavelength(spectrum, shiftNm);
+
+        // Get interpolated position on the locus
+        const interpolatedPos = interpolateLocusPosition(
+          preciseWavelength,
+          spectralLocusData
+        );
+
+        if (interpolatedPos) {
+          // Get intensity at the precise wavelength for extrude distance
+          const preciseIntensity = getSpectrumIntensityAtWavelength(
+            spectrum,
+            preciseWavelength,
+            shiftNm
+          );
+
+          // Calculate extrude distance (same scale as ridge)
+          const ridgeScale = mode === 'CIE1931' ? 0.08 : 0.06;
+          const extrudeDistance = preciseIntensity * ridgeScale;
+
+          // Calculate peak position with extrude
+          const peakX = interpolatedPos.x + interpolatedPos.nx * extrudeDistance;
+          const peakY = interpolatedPos.y + interpolatedPos.ny * extrudeDistance;
+
+          ridgeGroup
+            .append('circle')
+            .attr('cx', xScale(peakX))
+            .attr('cy', yScale(peakY))
+            .attr('r', isHoveringRidge ? 16 : 12)
+            .attr('fill', hexColor)
+            .attr('opacity', isHoveringRidge ? 0.4 : 0.3)
+            .attr('filter', 'url(#glow-filter)')
+            .style('pointer-events', 'none')
+            .style('transition', 'r 0.15s ease, opacity 0.15s ease');
+        }
       }
     }
 
@@ -787,43 +1081,59 @@ export function CIEDiagram({
       .attr('r', 2)
       .attr('fill', 'rgba(255,255,255,0.6)');
 
-    // Update tooltip for drag delta
+    // Update tooltip for drag delta - use interpolated position for smooth tracking
     const tooltipGroup = svg.select('.tooltip-group');
     tooltipGroup.selectAll('*').remove();
 
-    if (dragDelta !== null && spectrumRidgeData && spectrumRidgeData.length > 0) {
-      const peakPoint = spectrumRidgeData.reduce((max, p) =>
-        p.intensity > max.intensity ? p : max
+    if (dragDelta !== null && spectrumRidgeData && spectrumRidgeData.length > 0 && spectrum && spectrum.length > 0) {
+      // Calculate precise peak position for tooltip
+      const preciseWavelength = findInterpolatedPeakWavelength(spectrum, shiftNm);
+      const interpolatedPos = interpolateLocusPosition(
+        preciseWavelength,
+        spectralLocusData
       );
 
-      const tooltipX = xScale(peakPoint.x);
-      const tooltipY = yScale(peakPoint.y) - 25;
+      if (interpolatedPos) {
+        const preciseIntensity = getSpectrumIntensityAtWavelength(
+          spectrum,
+          preciseWavelength,
+          shiftNm
+        );
+        const ridgeScale = mode === 'CIE1931' ? 0.08 : 0.06;
+        const extrudeDistance = preciseIntensity * ridgeScale;
 
-      // Tooltip background
-      tooltipGroup
-        .append('rect')
-        .attr('x', tooltipX - 35)
-        .attr('y', tooltipY - 12)
-        .attr('width', 70)
-        .attr('height', 20)
-        .attr('rx', 4)
-        .attr('fill', 'rgba(0,0,0,0.8)')
-        .attr('stroke', hexColor)
-        .attr('stroke-width', 1);
+        const peakX = interpolatedPos.x + interpolatedPos.nx * extrudeDistance;
+        const peakY = interpolatedPos.y + interpolatedPos.ny * extrudeDistance;
 
-      // Tooltip text
-      const sign = dragDelta >= 0 ? '+' : '';
-      tooltipGroup
-        .append('text')
-        .attr('x', tooltipX)
-        .attr('y', tooltipY + 2)
-        .attr('fill', '#fff')
-        .attr('font-size', '11px')
-        .attr('font-weight', 'bold')
-        .attr('text-anchor', 'middle')
-        .text(`Δλ: ${sign}${Math.round(dragDelta)}nm`);
+        const tooltipX = xScale(peakX);
+        const tooltipY = yScale(peakY) - 25;
+
+        // Tooltip background
+        tooltipGroup
+          .append('rect')
+          .attr('x', tooltipX - 35)
+          .attr('y', tooltipY - 12)
+          .attr('width', 70)
+          .attr('height', 20)
+          .attr('rx', 4)
+          .attr('fill', 'rgba(0,0,0,0.8)')
+          .attr('stroke', hexColor)
+          .attr('stroke-width', 1);
+
+        // Tooltip text
+        const sign = dragDelta >= 0 ? '+' : '';
+        tooltipGroup
+          .append('text')
+          .attr('x', tooltipX)
+          .attr('y', tooltipY + 2)
+          .attr('fill', '#fff')
+          .attr('font-size', '11px')
+          .attr('font-weight', 'bold')
+          .attr('text-anchor', 'middle')
+          .text(`Δλ: ${sign}${Math.round(dragDelta)}nm`);
+      }
     }
-  }, [spectrumRidgeData, displayPoint, snapshotPoints, hexColor, isHoveringRidge, dragDelta]);
+  }, [spectrumRidgeData, displayPoint, snapshotPoints, hexColor, isHoveringRidge, dragDelta, spectrum, shiftNm, spectralLocusData, mode]);
 
   // ============================================
   // DRAG HANDLERS with requestAnimationFrame
