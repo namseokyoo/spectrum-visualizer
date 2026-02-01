@@ -450,6 +450,8 @@ export function CIEDiagram({
   } | null>(null);
   const zoomRef = useRef<ZoomBehavior<SVGSVGElement, unknown> | null>(null);
   const currentTransformRef = useRef<ZoomTransform>(d3.zoomIdentity);
+  // Ref to store displayPoint for zoom filter (avoids triggering static re-render)
+  const displayPointRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   // Flag to trigger dynamic redraw after zoom
   const [zoomTrigger, setZoomTrigger] = useState(0);
 
@@ -561,6 +563,11 @@ export function CIEDiagram({
     return convertToMode(currentPoint, mode);
   }, [currentPoint, currentPointUV, mode]);
 
+  // Keep displayPointRef in sync for zoom filter (avoids dependency in static useEffect)
+  useEffect(() => {
+    displayPointRef.current = displayPoint;
+  }, [displayPoint]);
+
   // Snapshot points in diagram coordinates
   const snapshotPoints = useMemo(() => {
     return snapshots.map((s) => ({
@@ -603,6 +610,7 @@ export function CIEDiagram({
 
   // ============================================
   // STATIC ELEMENTS RENDERING (runs once per mode/gamut change)
+  // Note: displayPoint is intentionally NOT in dependencies to preserve zoom state
   // ============================================
   useEffect(() => {
     if (!svgRef.current) return;
@@ -910,10 +918,12 @@ export function CIEDiagram({
 
             // Check if near current point or on ridge - disable pan for those
             // Use current scales directly (no transform adjustment needed in semantic zoom)
+            // Use displayPointRef to avoid stale closure issues
             if (scalesRef.current) {
               const { xScale: currXScale, yScale: currYScale } = scalesRef.current;
-              const pointX = currXScale(displayPoint.x);
-              const pointY = currYScale(displayPoint.y);
+              const currentDisplayPoint = displayPointRef.current;
+              const pointX = currXScale(currentDisplayPoint.x);
+              const pointY = currYScale(currentDisplayPoint.y);
               const distance = Math.sqrt(Math.pow(mouseX - pointX, 2) + Math.pow(mouseY - pointY, 2));
               if (distance < 20) return false;
             }
@@ -1108,7 +1118,9 @@ export function CIEDiagram({
     requestAnimationFrame(() => {
       setIsLoading(false);
     });
-  }, [bounds, spectralLocusData, gamutData, mode, displayPoint, theme, themeColors]);
+  // Note: displayPoint is intentionally excluded from dependencies to preserve zoom state during wavelength shifts
+  // displayPointRef is used in zoom filter instead
+  }, [bounds, spectralLocusData, gamutData, mode, theme, themeColors]);
 
   // ============================================
   // DYNAMIC ELEMENTS RENDERING (runs on spectrum/point changes)
