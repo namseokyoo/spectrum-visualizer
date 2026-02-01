@@ -22,6 +22,7 @@ import * as d3 from 'd3';
 import type { ZoomBehavior, ZoomTransform } from 'd3';
 import { SPECTRAL_LOCUS_XY, COLOR_GAMUTS } from '../data/cie1931';
 import { xyToUV } from '../lib/chromaticity';
+import { AxisRangeModal } from './AxisRangeModal';
 import type {
   CIE1931Coordinates,
   CIE1976Coordinates,
@@ -88,6 +89,16 @@ function convertToMode(
   return xy;
 }
 
+interface AxisRange {
+  min: number;
+  max: number;
+}
+
+interface CustomAxisRanges {
+  x?: AxisRange;
+  y?: AxisRange;
+}
+
 interface CIEDiagramProps {
   currentPoint: CIE1931Coordinates;
   currentPointUV?: CIE1976Coordinates;
@@ -103,6 +114,8 @@ interface CIEDiagramProps {
   intensityScale?: number;
   initialZoomTransform?: { k: number; x: number; y: number } | null;
   onZoomChange?: (transform: { k: number; x: number; y: number }) => void;
+  customAxisRanges?: CustomAxisRanges;
+  onAxisRangeChange?: (ranges: CustomAxisRanges) => void;
 }
 
 // Calculate normal vector at a point on the locus (pointing outward from the color space)
@@ -437,6 +450,8 @@ export function CIEDiagram({
   intensityScale = 1.0,
   initialZoomTransform,
   onZoomChange,
+  customAxisRanges,
+  onAxisRangeChange,
 }: CIEDiagramProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -466,6 +481,14 @@ export function CIEDiagram({
   const [dragDelta, setDragDelta] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [zoomLevel, setZoomLevel] = useState(1);
+
+  // State for axis range modal
+  const [axisRangeModal, setAxisRangeModal] = useState<{
+    isOpen: boolean;
+    axis: 'x' | 'y';
+    min: number;
+    max: number;
+  } | null>(null);
 
   // Theme-based colors
   const themeColors = useMemo(() => ({
@@ -607,10 +630,65 @@ export function CIEDiagram({
     svg.transition().duration(300).call(zoomRef.current.transform, d3.zoomIdentity);
   }, []);
 
+  // Handle axis range apply from modal
+  const handleAxisRangeApply = useCallback((axis: 'x' | 'y', min: number, max: number) => {
+    if (!svgRef.current || !baseScalesRef.current || !zoomRef.current) return;
+
+    const svg = d3.select(svgRef.current);
+    const { xScale: baseX, yScale: baseY } = baseScalesRef.current;
+    const margin = { top: 30, right: 30, bottom: 50, left: 50 };
+
+    // Calculate new transform based on the requested range
+    // We need to compute scale factor and translation
+    const baseXDomain = baseX.domain();
+    const baseYDomain = baseY.domain();
+    const baseYRange = baseY.range();
+
+    // Get current transform or use identity
+    const currentTransform = currentTransformRef.current;
+
+    if (axis === 'x') {
+      // Calculate new scale factor for X axis
+      const baseXWidth = baseXDomain[1] - baseXDomain[0];
+      const newXWidth = max - min;
+      const kx = baseXWidth / newXWidth;
+
+      // Calculate translation to position the new range at the viewport
+      const tx = margin.left - baseX(min) * kx;
+
+      // For independent axis scaling, we approximate with a uniform scale
+      // D3 zoom uses uniform scaling, so we take the X scale as primary
+      const newTransform = d3.zoomIdentity.translate(tx, currentTransform.y).scale(kx);
+
+      svg.transition().duration(300).call(zoomRef.current.transform, newTransform);
+    } else {
+      // Calculate new scale factor for Y axis
+      const baseYHeight = baseYDomain[1] - baseYDomain[0];
+      const newYHeight = max - min;
+      const ky = baseYHeight / newYHeight;
+
+      // Y axis is inverted (range goes from bottom to top in screen space)
+      // baseYRange[0] is bottom (larger screen y), baseYRange[1] is top (smaller screen y)
+      const ty = baseYRange[1] - baseY(max) * ky;
+
+      // For Y axis, we use Y scale as primary
+      const newTransform = d3.zoomIdentity.translate(currentTransform.x, ty).scale(ky);
+
+      svg.transition().duration(300).call(zoomRef.current.transform, newTransform);
+    }
+
+    // Notify parent of custom axis range change
+    if (onAxisRangeChange) {
+      const newRanges = { ...customAxisRanges };
+      newRanges[axis] = { min, max };
+      onAxisRangeChange(newRanges);
+    }
+  }, [customAxisRanges, onAxisRangeChange]);
+
   // Set loading state when dependencies change (before the main effect runs)
   // This is intentional for D3.js diagram initialization UX
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+     
     setIsLoading(true);
   }, [bounds, mode]);
 
@@ -831,7 +909,8 @@ export function CIEDiagram({
     const xAxis = d3.axisBottom(xScale).ticks(8).tickSize(-innerHeight);
     const yAxis = d3.axisLeft(yScale).ticks(8).tickSize(-innerWidth);
 
-    svg
+    // X-axis with double-click to set range
+    const xAxisGroup = svg
       .append('g')
       .attr('class', 'x-axis')
       .attr('transform', `translate(0,${margin.top + innerHeight})`)
@@ -840,7 +919,27 @@ export function CIEDiagram({
       .call((g) => g.selectAll('.tick line').attr('stroke', themeColors.gridLine).attr('stroke-dasharray', '2,2'))
       .call((g) => g.selectAll('.tick text').attr('fill', themeColors.axisText).attr('font-size', '10px'));
 
-    svg
+    // Add invisible rect for X-axis click area
+    xAxisGroup
+      .append('rect')
+      .attr('class', 'x-axis-clickable')
+      .attr('x', 0)
+      .attr('y', -10)
+      .attr('width', innerWidth)
+      .attr('height', 40)
+      .attr('fill', 'transparent')
+      .style('cursor', 'pointer')
+      .on('dblclick', (event: MouseEvent) => {
+        event.stopPropagation();
+        if (scalesRef.current) {
+          const [min, max] = scalesRef.current.xScale.domain();
+           
+          setAxisRangeModal({ isOpen: true, axis: 'x', min, max });
+        }
+      });
+
+    // Y-axis with double-click to set range
+    const yAxisGroup = svg
       .append('g')
       .attr('class', 'y-axis')
       .attr('transform', `translate(${margin.left},0)`)
@@ -848,6 +947,25 @@ export function CIEDiagram({
       .call((g) => g.select('.domain').remove())
       .call((g) => g.selectAll('.tick line').attr('stroke', themeColors.gridLine).attr('stroke-dasharray', '2,2'))
       .call((g) => g.selectAll('.tick text').attr('fill', themeColors.axisText).attr('font-size', '10px'));
+
+    // Add invisible rect for Y-axis click area
+    yAxisGroup
+      .append('rect')
+      .attr('class', 'y-axis-clickable')
+      .attr('x', -40)
+      .attr('y', margin.top)
+      .attr('width', 40)
+      .attr('height', innerHeight)
+      .attr('fill', 'transparent')
+      .style('cursor', 'pointer')
+      .on('dblclick', (event: MouseEvent) => {
+        event.stopPropagation();
+        if (scalesRef.current) {
+          const [min, max] = scalesRef.current.yScale.domain();
+           
+          setAxisRangeModal({ isOpen: true, axis: 'y', min, max });
+        }
+      });
 
     // Axis labels
     svg
@@ -978,7 +1096,7 @@ export function CIEDiagram({
           updateStaticElements(svg, newXScale, newYScale);
 
           // Trigger re-render of dynamic elements with new scales
-          // eslint-disable-next-line react-hooks/set-state-in-effect
+           
           setZoomTrigger(prev => prev + 1);
         }
       });
@@ -1120,16 +1238,16 @@ export function CIEDiagram({
         .scale(initialZoomTransform.k);
       svg.call(zoom.transform, savedTransform);
       currentTransformRef.current = savedTransform;
-      // eslint-disable-next-line react-hooks/set-state-in-effect
+       
       setZoomLevel(initialZoomTransform.k);
     } else {
       // Reset transform on mode change
       svg.call(zoom.transform, d3.zoomIdentity);
       currentTransformRef.current = d3.zoomIdentity;
-      // eslint-disable-next-line react-hooks/set-state-in-effect
+       
       setZoomLevel(1);
     }
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+     
     setZoomTrigger(0);
 
     staticRenderedRef.current = true;
@@ -1699,6 +1817,8 @@ export function CIEDiagram({
         <span className="mx-1">|</span>
         <kbd className={`px-1 py-0.5 rounded border ${themeColors.kbdBg} ${themeColors.kbdText} ${themeColors.kbdBorder}`}>Shift</kbd>
         <span className="ml-1">±5nm</span>
+        <span className="mx-1">|</span>
+        <span>Double-click axis to set range</span>
       </div>
 
       <svg
@@ -1706,6 +1826,19 @@ export function CIEDiagram({
         className="w-full h-full"
         style={{ minHeight: '400px' }}
       />
+
+      {/* Axis Range Modal */}
+      {axisRangeModal && (
+        <AxisRangeModal
+          isOpen={axisRangeModal.isOpen}
+          axis={axisRangeModal.axis}
+          currentMin={axisRangeModal.min}
+          currentMax={axisRangeModal.max}
+          onApply={(min, max) => handleAxisRangeApply(axisRangeModal.axis, min, max)}
+          onClose={() => setAxisRangeModal(null)}
+          theme={theme}
+        />
+      )}
     </div>
   );
 }

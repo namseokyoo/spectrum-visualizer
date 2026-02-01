@@ -12,6 +12,16 @@ import type { SpectrumPoint, ChromaticityResult, DiagramMode, GamutType } from '
 // Session storage key and interface
 const SESSION_STORAGE_KEY = 'spectrum-visualizer-session';
 
+interface AxisRange {
+  min: number;
+  max: number;
+}
+
+interface CustomAxisRanges {
+  x?: AxisRange;
+  y?: AxisRange;
+}
+
 interface SessionState {
   spectrum: SpectrumPoint[];
   shiftNm: number;
@@ -19,6 +29,7 @@ interface SessionState {
   enabledGamuts: GamutType[];
   intensityScale: number;
   zoomTransform: { k: number; x: number; y: number } | null;
+  customAxisRanges?: CustomAxisRanges;
 }
 
 // Load session from localStorage
@@ -53,6 +64,9 @@ function App() {
   );
   const [zoomTransform, setZoomTransform] = useState<{ k: number; x: number; y: number } | null>(
     savedSession.zoomTransform || null
+  );
+  const [customAxisRanges, setCustomAxisRanges] = useState<CustomAxisRanges>(
+    savedSession.customAxisRanges || {}
   );
 
   // Snapshot management
@@ -122,9 +136,10 @@ function App() {
       enabledGamuts,
       intensityScale,
       zoomTransform,
+      customAxisRanges,
     };
     localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
-  }, [spectrum, shiftNm, diagramMode, enabledGamuts, intensityScale, zoomTransform]);
+  }, [spectrum, shiftNm, diagramMode, enabledGamuts, intensityScale, zoomTransform, customAxisRanges]);
 
   // Reset all settings
   const handleResetAll = useCallback(() => {
@@ -135,6 +150,7 @@ function App() {
     setEnabledGamuts(['sRGB']);
     setIntensityScale(1.0);
     setZoomTransform(null);
+    setCustomAxisRanges({});
   }, []);
 
   // Handle zoom change from CIEDiagram
@@ -390,13 +406,15 @@ function App() {
               intensityScale={intensityScale}
               initialZoomTransform={zoomTransform}
               onZoomChange={handleZoomChange}
+              customAxisRanges={customAxisRanges}
+              onAxisRangeChange={setCustomAxisRanges}
             />
           </div>
 
           {/* Interaction hints - Hidden on mobile */}
           {!isMobile && (
             <p className={`text-center text-[10px] mt-2 ${theme === 'dark' ? 'text-gray-600' : 'text-gray-500'}`}>
-              Drag ridge to shift wavelength | Scroll to zoom | Click and drag to pan
+              Drag ridge to shift wavelength | Scroll to zoom | Click and drag to pan | Double-click axis to set range
             </p>
           )}
         </main>
