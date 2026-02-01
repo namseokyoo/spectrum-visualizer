@@ -438,12 +438,20 @@ export function CIEDiagram({
   const lastDragPos = useRef<{ x: number; y: number } | null>(null);
   const animationFrameRef = useRef<number | null>(null);
   const staticRenderedRef = useRef(false);
+  // Base scales (original, for zoom reset)
+  const baseScalesRef = useRef<{
+    xScale: d3.ScaleLinear<number, number>;
+    yScale: d3.ScaleLinear<number, number>;
+  } | null>(null);
+  // Current scales (zoom-adjusted)
   const scalesRef = useRef<{
     xScale: d3.ScaleLinear<number, number>;
     yScale: d3.ScaleLinear<number, number>;
   } | null>(null);
   const zoomRef = useRef<ZoomBehavior<SVGSVGElement, unknown> | null>(null);
   const currentTransformRef = useRef<ZoomTransform>(d3.zoomIdentity);
+  // Flag to trigger dynamic redraw after zoom
+  const [zoomTrigger, setZoomTrigger] = useState(0);
 
   // State for drag UX
   const [isHoveringRidge, setIsHoveringRidge] = useState(false);
@@ -579,9 +587,9 @@ export function CIEDiagram({
     });
   }, [enabledGamuts, mode]);
 
-  // Reset zoom to identity
+  // Reset zoom to identity (Semantic Zoom: restore original scales)
   const handleResetZoom = useCallback(() => {
-    if (!svgRef.current || !zoomRef.current) return;
+    if (!svgRef.current || !zoomRef.current || !baseScalesRef.current) return;
     const svg = d3.select(svgRef.current);
     svg.transition().duration(300).call(zoomRef.current.transform, d3.zoomIdentity);
   }, []);
@@ -611,6 +619,7 @@ export function CIEDiagram({
     staticRenderedRef.current = false;
 
     // Create scales and store in ref for dynamic updates
+    // Base scales are the original (unzoomed) scales
     const xScale = d3
       .scaleLinear()
       .domain([bounds.xMin, bounds.xMax])
@@ -621,7 +630,9 @@ export function CIEDiagram({
       .domain([bounds.yMin, bounds.yMax])
       .range([margin.top + innerHeight, margin.top]);
 
-    scalesRef.current = { xScale, yScale };
+    // Store both base and current scales
+    baseScalesRef.current = { xScale: xScale.copy(), yScale: yScale.copy() };
+    scalesRef.current = { xScale: xScale.copy(), yScale: yScale.copy() };
 
     // Background
     svg
@@ -857,13 +868,13 @@ export function CIEDiagram({
       .attr('text-anchor', 'end')
       .text(mode === 'CIE1931' ? 'CIE 1931 xy' : "CIE 1976 u'v'");
 
-    // Create a main content group that will be zoomed/panned
-    // Apply clip-path to prevent content from overflowing into axis area during zoom/pan
+    // Create a main content group with clip-path
+    // Semantic Zoom: No CSS transform on main-group, elements are re-rendered with new scales
     const mainGroup = svg.append('g')
       .attr('class', 'main-group')
       .attr('clip-path', 'url(#chart-clip)');
 
-    // Move static group into main group for zoom
+    // Move static group into main group (static elements will be re-rendered on zoom)
     const existingStaticContent = staticGroup.node();
     if (existingStaticContent) {
       mainGroup.node()?.appendChild(existingStaticContent);
@@ -876,12 +887,13 @@ export function CIEDiagram({
     mainGroup.append('g').attr('class', 'snapshots-group');
     mainGroup.append('g').attr('class', 'current-point-group');
 
-    // Create tooltip group (outside main group so it doesn't zoom)
+    // Create tooltip group (outside main group so it doesn't clip)
     svg.append('g').attr('class', 'tooltip-group');
 
     // ============================================
-    // ZOOM BEHAVIOR SETUP
+    // ZOOM BEHAVIOR SETUP (Semantic Zoom)
     // ============================================
+    // Semantic Zoom: Instead of CSS transform, we rescale the axes and re-render elements
     const zoom = d3.zoom<SVGSVGElement, unknown>()
       .scaleExtent([0.5, 8]) // Allow zoom from 50% to 800%
       .translateExtent([[-width * 0.5, -height * 0.5], [width * 1.5, height * 1.5]])
@@ -895,17 +907,14 @@ export function CIEDiagram({
           if (rect) {
             const mouseX = mouseEvent.clientX - rect.left;
             const mouseY = mouseEvent.clientY - rect.top;
-            // Transform mouse position to account for current zoom
-            const transform = currentTransformRef.current;
-            const transformedX = (mouseX - transform.x) / transform.k;
-            const transformedY = (mouseY - transform.y) / transform.k;
 
             // Check if near current point or on ridge - disable pan for those
+            // Use current scales directly (no transform adjustment needed in semantic zoom)
             if (scalesRef.current) {
-              const { xScale, yScale } = scalesRef.current;
-              const pointX = xScale(displayPoint.x);
-              const pointY = yScale(displayPoint.y);
-              const distance = Math.sqrt(Math.pow(transformedX - pointX, 2) + Math.pow(transformedY - pointY, 2));
+              const { xScale: currXScale, yScale: currYScale } = scalesRef.current;
+              const pointX = currXScale(displayPoint.x);
+              const pointY = currYScale(displayPoint.y);
+              const distance = Math.sqrt(Math.pow(mouseX - pointX, 2) + Math.pow(mouseY - pointY, 2));
               if (distance < 20) return false;
             }
           }
@@ -919,9 +928,168 @@ export function CIEDiagram({
         currentTransformRef.current = transform;
         setZoomLevel(transform.k);
 
-        // Apply transform to main group
-        svg.select('.main-group').attr('transform', transform.toString());
+        // Semantic Zoom: Rescale axes based on transform
+        if (baseScalesRef.current) {
+          const newXScale = transform.rescaleX(baseScalesRef.current.xScale);
+          const newYScale = transform.rescaleY(baseScalesRef.current.yScale);
+
+          // Update current scales ref
+          scalesRef.current = { xScale: newXScale, yScale: newYScale };
+
+          // Update axes with new scales
+          const xAxisGroup = svg.select<SVGGElement>('.x-axis');
+          const yAxisGroup = svg.select<SVGGElement>('.y-axis');
+
+          const xAxis = d3.axisBottom(newXScale).ticks(8).tickSize(-innerHeight);
+          const yAxis = d3.axisLeft(newYScale).ticks(8).tickSize(-innerWidth);
+
+          xAxisGroup
+            .call(xAxis)
+            .call((g) => g.select('.domain').remove())
+            .call((g) => g.selectAll('.tick line').attr('stroke', themeColors.gridLine).attr('stroke-dasharray', '2,2'))
+            .call((g) => g.selectAll('.tick text').attr('fill', themeColors.axisText).attr('font-size', '10px'));
+
+          yAxisGroup
+            .call(yAxis)
+            .call((g) => g.select('.domain').remove())
+            .call((g) => g.selectAll('.tick line').attr('stroke', themeColors.gridLine).attr('stroke-dasharray', '2,2'))
+            .call((g) => g.selectAll('.tick text').attr('fill', themeColors.axisText).attr('font-size', '10px'));
+
+          // Update static elements with new scales (Semantic Zoom)
+          updateStaticElements(svg, newXScale, newYScale);
+
+          // Trigger re-render of dynamic elements with new scales
+          // eslint-disable-next-line react-hooks/set-state-in-effect
+          setZoomTrigger(prev => prev + 1);
+        }
       });
+
+    // Helper function to update static elements on zoom
+    function updateStaticElements(
+      svgSelection: d3.Selection<SVGSVGElement, unknown, null, undefined>,
+      newXScale: d3.ScaleLinear<number, number>,
+      newYScale: d3.ScaleLinear<number, number>
+    ) {
+      const staticGroup = svgSelection.select('.main-group .static-group');
+
+      // Update spectral locus paths
+      const locusPath = d3
+        .line<{ x: number; y: number }>()
+        .x((d) => newXScale(d.x))
+        .y((d) => newYScale(d.y))
+        .curve(d3.curveCatmullRom.alpha(0.5));
+
+      // Generate high-resolution locus for smooth boundary rendering
+      const highResLocus = generateHighResolutionLocus(spectralLocusData, 1);
+      const closedLocusData = [...highResLocus, highResLocus[0]];
+
+      // Update filled horseshoe path and outline using nodes()
+      const allPaths = staticGroup.selectAll('path').nodes() as SVGPathElement[];
+      allPaths.forEach((pathEl, i) => {
+        const path = d3.select(pathEl);
+        if (i === 0) {
+          // Filled path
+          path.datum(closedLocusData).attr('d', locusPath);
+        } else if (i === 1) {
+          // Outline path
+          path.datum(highResLocus).attr('d', locusPath);
+        }
+      });
+
+      // Update purple line
+      const purpleLine = [spectralLocusData[0], spectralLocusData[spectralLocusData.length - 1]];
+      staticGroup.select('line')
+        .attr('x1', newXScale(purpleLine[0].x))
+        .attr('y1', newYScale(purpleLine[0].y))
+        .attr('x2', newXScale(purpleLine[1].x))
+        .attr('y2', newYScale(purpleLine[1].y));
+
+      // Update wavelength labels
+      const wavelengthLabels = staticGroup.select('.wavelength-labels').selectAll('text').nodes() as SVGTextElement[];
+      wavelengthLabels.forEach((textEl) => {
+        const text = d3.select(textEl);
+        const wavelengthText = text.text();
+        const wavelength = parseInt(wavelengthText);
+
+        const point = spectralLocusData.find((p) => p.wavelength === wavelength);
+        if (point) {
+          const idx = spectralLocusData.findIndex((p) => p.wavelength === wavelength);
+          const prev = spectralLocusData[Math.max(0, idx - 1)];
+          const next = spectralLocusData[Math.min(spectralLocusData.length - 1, idx + 1)];
+
+          const dx = next.x - prev.x;
+          const dy = next.y - prev.y;
+          const len = Math.sqrt(dx * dx + dy * dy);
+          const offsetX = (-dy / len) * 0.04;
+          const offsetY = (dx / len) * 0.04;
+
+          text
+            .attr('x', newXScale(point.x + offsetX))
+            .attr('y', newYScale(point.y + offsetY));
+        }
+      });
+
+      // Update gamut triangles - need to re-select and update each
+      let gamutIndex = 0;
+      gamutData.forEach((gamut) => {
+        const trianglePath = d3
+          .line<{ x: number; y: number }>()
+          .x((d) => newXScale(d.x))
+          .y((d) => newYScale(d.y));
+
+        const closedVertices = [...gamut.vertices, gamut.vertices[0]];
+
+        // Update triangle path (every other path after locus paths and before other elements)
+        // Gamut paths start after the 2 locus paths
+        const gamutPathIndex = 2 + gamutIndex;
+        if (allPaths[gamutPathIndex]) {
+          d3.select(allPaths[gamutPathIndex])
+            .datum(closedVertices)
+            .attr('d', trianglePath);
+        }
+
+        // Update centroid text
+        const centroid = {
+          x: gamut.vertices.reduce((sum, v) => sum + v.x, 0) / 3,
+          y: gamut.vertices.reduce((sum, v) => sum + v.y, 0) / 3,
+        };
+
+        // Find the gamut label text
+        const allTextNodes = staticGroup.selectAll('text').nodes() as SVGTextElement[];
+        allTextNodes.forEach((textNode) => {
+          const textEl = d3.select(textNode);
+          if (textEl.text() === gamut.name) {
+            textEl
+              .attr('x', newXScale(centroid.x))
+              .attr('y', newYScale(centroid.y));
+          }
+        });
+
+        gamutIndex++;
+      });
+
+      // Update D65 white point
+      const d65 = mode === 'CIE1976' ? { x: 0.1978, y: 0.4683 } : { x: 0.3127, y: 0.329 };
+      const circles = staticGroup.selectAll('circle').nodes() as SVGCircleElement[];
+      circles.forEach((circleEl) => {
+        const circle = d3.select(circleEl);
+        // D65 is a small circle
+        circle
+          .attr('cx', newXScale(d65.x))
+          .attr('cy', newYScale(d65.y));
+      });
+
+      // Update D65 label
+      const textNodes = staticGroup.selectAll('text').nodes() as SVGTextElement[];
+      textNodes.forEach((textNode) => {
+        const textEl = d3.select(textNode);
+        if (textEl.text() === 'D65') {
+          textEl
+            .attr('x', newXScale(d65.x) + 8)
+            .attr('y', newYScale(d65.y) + 4);
+        }
+      });
+    }
 
     svg.call(zoom);
     zoomRef.current = zoom;
@@ -931,6 +1099,8 @@ export function CIEDiagram({
     currentTransformRef.current = d3.zoomIdentity;
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setZoomLevel(1);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setZoomTrigger(0);
 
     staticRenderedRef.current = true;
 
@@ -1182,7 +1352,7 @@ export function CIEDiagram({
           .text(`Δλ: ${sign}${Math.round(dragDelta)}nm`);
       }
     }
-  }, [spectrumRidgeData, displayPoint, snapshotPoints, hexColor, isHoveringRidge, dragDelta, spectrum, shiftNm, spectralLocusData, mode, themeColors]);
+  }, [spectrumRidgeData, displayPoint, snapshotPoints, hexColor, isHoveringRidge, dragDelta, spectrum, shiftNm, spectralLocusData, mode, themeColors, zoomTrigger]);
 
   // ============================================
   // DRAG HANDLERS with requestAnimationFrame
@@ -1288,7 +1458,6 @@ export function CIEDiagram({
     const svgElement = svgRef.current;
     if (!svgElement || !scalesRef.current) return;
 
-    const { xScale } = scalesRef.current;
     let accumulatedDelta = 0;
 
     // Helper to get position from mouse or touch event
@@ -1300,10 +1469,12 @@ export function CIEDiagram({
     };
 
     // Helper to check if position is on draggable area
+    // Semantic Zoom: No transform adjustment needed, scalesRef.current already reflects zoom
     const checkDraggableArea = (rawX: number, rawY: number) => {
-      const transform = currentTransformRef.current;
-      const mouseX = (rawX - transform.x) / transform.k;
-      const mouseY = (rawY - transform.y) / transform.k;
+      // In Semantic Zoom, mouse coordinates are used directly
+      // since scales already reflect the current zoom level
+      const mouseX = rawX;
+      const mouseY = rawY;
 
       const onRidge = spectrumRidgeData && spectrumRidgeData.length > 0 && isInsideRidge(mouseX, mouseY);
       const onPoint = isNearCurrentPoint(mouseX, mouseY);
@@ -1333,8 +1504,6 @@ export function CIEDiagram({
 
     // Move during drag
     const moveDrag = (rawX: number, rawY: number) => {
-      const transform = currentTransformRef.current;
-
       // Update hover state (mouse only)
       if (!isDragging.current) {
         const { onRidge, onPoint } = checkDraggableArea(rawX, rawY);
@@ -1343,17 +1512,17 @@ export function CIEDiagram({
       }
 
       // Handle dragging with requestAnimationFrame for 60fps
-      if (isDragging.current && lastDragPos.current && onShiftChange) {
+      if (isDragging.current && lastDragPos.current && onShiftChange && scalesRef.current) {
         if (animationFrameRef.current) {
           cancelAnimationFrame(animationFrameRef.current);
         }
 
         animationFrameRef.current = requestAnimationFrame(() => {
-          if (!lastDragPos.current) return;
+          if (!lastDragPos.current || !scalesRef.current) return;
 
-          const lastTransformedX = (lastDragPos.current.x - transform.x) / transform.k;
-          const currentTransformedX = (rawX - transform.x) / transform.k;
-          const coordDeltaX = xScale.invert(currentTransformedX) - xScale.invert(lastTransformedX);
+          // Semantic Zoom: Use current scales directly (already zoom-adjusted)
+          const { xScale } = scalesRef.current;
+          const coordDeltaX = xScale.invert(rawX) - xScale.invert(lastDragPos.current.x);
 
           const nmDelta = coordDeltaX * 200;
           accumulatedDelta += nmDelta;
