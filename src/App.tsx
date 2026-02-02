@@ -2,7 +2,7 @@ import { useState, useCallback, useMemo, useEffect } from 'react';
 import { DataInput } from './components/DataInput';
 import { CIEDiagram } from './components/CIEDiagram';
 import { SnapshotList } from './components/SnapshotList';
-import { MobileControls } from './components/mobile/MobileControls';
+import { MobileControlPanel } from './components/mobile/MobileControlPanel';
 import { useSnapshots } from './hooks/useSnapshots';
 import { useTheme } from './hooks/useTheme';
 import { calculateChromaticity, shiftSpectrum, PRESET_GREEN, analyzeSpectrum } from './lib';
@@ -229,8 +229,9 @@ function App() {
       </header>
 
       {/* Main content area - flexible layout with overflow handling */}
-      {/* Changed from fixed height to min-height + overflow for better mobile desktop mode support */}
-      <div className="flex flex-col lg:flex-row min-h-[calc(100vh-48px)] lg:min-h-[calc(100vh-56px)] lg:h-[calc(100vh-56px)] overflow-y-auto lg:overflow-hidden">
+      {/* Mobile: flex-1 to share space with inline control panel */}
+      {/* Desktop: fixed height with sidebars */}
+      <div className="flex flex-col lg:flex-row flex-1 lg:flex-none lg:h-[calc(100vh-56px)] overflow-hidden">
         {/* Left Sidebar - Hidden on mobile/tablet, shown on lg+ */}
         {/* Width: 220px on lg, 280px on xl+ for narrow viewport support */}
         <aside className={`hidden lg:block lg:w-[220px] xl:w-[280px] flex-shrink-0 p-3 xl:p-4 overflow-y-auto ${theme === 'dark' ? 'bg-gray-800/50 border-r border-gray-700/50' : 'bg-gray-50 border-r border-gray-200'}`}>
@@ -491,9 +492,9 @@ function App() {
           </div>
 
           {/* CIE Diagram - responsive constraints for various viewport sizes */}
-          {/* Mobile (<lg): aspect-square with max-h-[60vh] for portrait, max-h-[50vh] for landscape */}
+          {/* Mobile (<lg): aspect-square with max-h to leave room for inline controls */}
           {/* Desktop (lg+): flex-1 fills remaining space */}
-          <div className={`flex-1 rounded-xl overflow-hidden shadow-inner aspect-square max-h-[min(60vh,calc(100vw-2rem))] lg:aspect-auto lg:max-h-none lg:min-h-[400px] ${theme === 'dark' ? 'bg-gray-800/30 border border-gray-700/30' : 'bg-gray-100/50 border border-gray-200'}`}>
+          <div className={`flex-1 rounded-xl overflow-hidden shadow-inner aspect-square max-h-[min(50vh,calc(100vw-2rem))] lg:aspect-auto lg:max-h-none lg:min-h-[400px] ${theme === 'dark' ? 'bg-gray-800/30 border border-gray-700/30' : 'bg-gray-100/50 border border-gray-200'}`}>
             <CIEDiagram
               currentPoint={chromaticity.cie1931}
               currentPointUV={chromaticity.cie1976}
@@ -613,10 +614,10 @@ function App() {
         </aside>
       </div>
 
-      {/* Mobile Controls - Only shown on mobile/tablet (hidden on lg and above) */}
-      {/* Changed from md:hidden to lg:hidden to support mobile desktop mode (~980px viewport) */}
+      {/* Mobile Control Panel - Only shown on mobile/tablet (hidden on lg and above) */}
+      {/* Inline panel displayed directly below the graph, no FAB or BottomSheet */}
       <div className="lg:hidden">
-        <MobileControls
+        <MobileControlPanel
           shiftNm={shiftNm}
           onShiftChange={handleShiftChange}
           chromaticity={chromaticity}
