@@ -1185,34 +1185,14 @@ export function CIEDiagram({
     // Semantic Zoom: Instead of CSS transform, we rescale the axes and re-render elements
     const zoom = d3.zoom<SVGSVGElement, unknown>()
       .scaleExtent([0.5, 50]) // Allow zoom from 50% to 5000%
-      .translateExtent([[-width * 0.5, -height * 0.5], [width * 1.5, height * 1.5]])
       .filter((event: MouseEvent | WheelEvent | TouchEvent) => {
-        // Allow zoom with wheel, and pan only when not dragging the ridge
+        // Only allow wheel events for zoom
+        // Pan (mousedown/touchstart) is completely disabled
+        // - Axis double-click provides range setting functionality
+        // - Ridge drag is handled separately and is not affected
         if (event.type === 'wheel') return true;
-        if (event.type === 'mousedown' || event.type === 'touchstart') {
-          // Check if we're on the ridge - if so, don't start pan
-          const mouseEvent = event as MouseEvent;
-          const rect = svgRef.current?.getBoundingClientRect();
-          if (rect) {
-            const mouseX = mouseEvent.clientX - rect.left;
-            const mouseY = mouseEvent.clientY - rect.top;
-
-            // Check if near current point or on ridge - disable pan for those
-            // Use current scales directly (no transform adjustment needed in semantic zoom)
-            // Use displayPointRef to avoid stale closure issues
-            if (scalesRef.current) {
-              const { xScale: currXScale, yScale: currYScale } = scalesRef.current;
-              const currentDisplayPoint = displayPointRef.current;
-              const pointX = currXScale(currentDisplayPoint.x);
-              const pointY = currYScale(currentDisplayPoint.y);
-              const distance = Math.sqrt(Math.pow(mouseX - pointX, 2) + Math.pow(mouseY - pointY, 2));
-              if (distance < 20) return false;
-            }
-          }
-        }
-        // Only allow left mouse button (button 0) for non-touch events
-        const mouseEvt = event as MouseEvent;
-        return !event.ctrlKey && (!('button' in event) || mouseEvt.button === 0);
+        // Block all mouse/touch drag for pan (disabled by design)
+        return false;
       })
       .on('zoom', (event) => {
         const transform = event.transform as ZoomTransform;
