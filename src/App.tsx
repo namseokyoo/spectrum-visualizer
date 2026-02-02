@@ -492,9 +492,9 @@ function App() {
           </div>
 
           {/* CIE Diagram - responsive constraints for various viewport sizes */}
-          {/* Mobile (<lg): aspect-square with max-h to leave room for inline controls */}
+          {/* Mobile (<lg): aspect-[1/1.1] to ensure x-axis visibility, with max-h to leave room for inline controls */}
           {/* Desktop (lg+): flex-1 fills remaining space */}
-          <div className={`flex-1 rounded-xl overflow-hidden shadow-inner aspect-square max-h-[min(50vh,calc(100vw-2rem))] lg:aspect-auto lg:max-h-none lg:min-h-[400px] ${theme === 'dark' ? 'bg-gray-800/30 border border-gray-700/30' : 'bg-gray-100/50 border border-gray-200'}`}>
+          <div className={`flex-1 rounded-xl overflow-visible shadow-inner aspect-[1/1.1] max-h-[min(55vh,calc(100vw-1rem))] lg:aspect-auto lg:max-h-none lg:min-h-[400px] ${theme === 'dark' ? 'bg-gray-800/30 border border-gray-700/30' : 'bg-gray-100/50 border border-gray-200'}`}>
             <CIEDiagram
               currentPoint={chromaticity.cie1931}
               currentPointUV={chromaticity.cie1976}
