@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react';
 import { BottomSheet } from './BottomSheet';
 import type { Snapshot, GamutType, ChromaticityResult } from '../../types/spectrum';
+import type { SpectrumAnalysis } from '../../lib/spectrum-analysis';
 
 interface MobileControlsProps {
   // Wavelength shift
@@ -8,6 +9,8 @@ interface MobileControlsProps {
   onShiftChange: (value: number) => void;
   // Chromaticity display
   chromaticity: ChromaticityResult;
+  // Spectrum analysis
+  spectrumAnalysis?: SpectrumAnalysis;
   // Snapshots
   snapshots: Snapshot[];
   onSaveSnapshot: () => void;
@@ -37,6 +40,7 @@ export function MobileControls({
   shiftNm,
   onShiftChange,
   chromaticity,
+  spectrumAnalysis,
   snapshots,
   onSaveSnapshot,
   onRestoreSnapshot,
@@ -362,6 +366,27 @@ export function MobileControls({
                 </div>
               </div>
             </div>
+
+            {/* Spectrum Analysis */}
+            {spectrumAnalysis && (
+              <div className={`p-4 rounded-lg ${inputBg} ${borderColor} border`}>
+                <h3 className={`text-sm font-medium mb-2 ${textColor}`}>Spectrum</h3>
+                <div className="space-y-2 text-sm">
+                  <div className="flex justify-between">
+                    <span className={mutedColor}>Peak λ</span>
+                    <span className={`font-mono ${textColor}`}>{spectrumAnalysis.peakWavelength.toFixed(1)} nm</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className={mutedColor}>FWHM</span>
+                    <span className={`font-mono ${textColor}`}>{spectrumAnalysis.fwhm?.toFixed(1) ?? 'N/A'} nm</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className={mutedColor}>FWQM</span>
+                    <span className={`font-mono ${textColor}`}>{spectrumAnalysis.fwqm?.toFixed(1) ?? 'N/A'} nm</span>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Reset All Button */}
             {onResetAll && (

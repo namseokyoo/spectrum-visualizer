@@ -16,6 +16,9 @@ export {
   createSpectrumData,
 } from './wavelength-shift';
 
+// Spectrum analysis
+export { analyzeSpectrum, type SpectrumAnalysis } from './spectrum-analysis';
+
 // Data processing
 export { normalizeSpectrum, normalizeToRange, baselineCorrection, smoothSpectrum } from './normalize';
 export {

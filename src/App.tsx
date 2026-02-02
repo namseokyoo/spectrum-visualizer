@@ -6,7 +6,7 @@ import { MobileControls } from './components/mobile/MobileControls';
 import { useSnapshots } from './hooks/useSnapshots';
 import { useTheme } from './hooks/useTheme';
 import { useIsMobile } from './hooks/useMediaQuery';
-import { calculateChromaticity, shiftSpectrum, PRESET_GREEN } from './lib';
+import { calculateChromaticity, shiftSpectrum, PRESET_GREEN, analyzeSpectrum } from './lib';
 import type { SpectrumPoint, ChromaticityResult, DiagramMode, GamutType } from './types/spectrum';
 
 // Session storage key and interface
@@ -69,6 +69,9 @@ function App() {
     savedSession.customAxisRanges || {}
   );
 
+  // Monitor section tab state
+  const [monitorTab, setMonitorTab] = useState<'color' | 'spectrum'>('color');
+
   // Snapshot management
   const {
     snapshots,
@@ -82,6 +85,11 @@ function App() {
   const chromaticity = useMemo<ChromaticityResult>(() => {
     const shiftedSpectrum = shiftSpectrum(spectrum, shiftNm);
     return calculateChromaticity(shiftedSpectrum);
+  }, [spectrum, shiftNm]);
+
+  // Calculate spectrum analysis (peak, FWHM, FWQM)
+  const spectrumAnalysis = useMemo(() => {
+    return analyzeSpectrum(spectrum, shiftNm);
   }, [spectrum, shiftNm]);
 
   // Handle data loaded from DataInput
@@ -288,75 +296,153 @@ function App() {
             </div>
           </section>
 
-          {/* Color Monitor */}
+          {/* Monitor Section with Tabs */}
           <section>
             <h2 className={`text-[11px] font-semibold mb-2 uppercase tracking-wider flex items-center gap-2 ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>
               <span className="w-1.5 h-1.5 bg-purple-500 rounded-full"></span>
               Monitor
             </h2>
+
+            {/* Tab Navigation */}
+            <div className={`flex rounded-lg p-0.5 mb-2 ${theme === 'dark' ? 'bg-gray-900/50 border border-gray-700/30' : 'bg-gray-100 border border-gray-200'}`}>
+              <button
+                onClick={() => setMonitorTab('color')}
+                className={`flex-1 px-2 py-1.5 text-[10px] font-medium rounded-md transition-all ${
+                  monitorTab === 'color'
+                    ? 'bg-blue-600 text-white shadow-sm'
+                    : theme === 'dark' ? 'text-gray-400 hover:text-gray-200 hover:bg-gray-700/50' : 'text-gray-600 hover:text-gray-800 hover:bg-gray-200/50'
+                }`}
+              >
+                Color
+              </button>
+              <button
+                onClick={() => setMonitorTab('spectrum')}
+                className={`flex-1 px-2 py-1.5 text-[10px] font-medium rounded-md transition-all ${
+                  monitorTab === 'spectrum'
+                    ? 'bg-blue-600 text-white shadow-sm'
+                    : theme === 'dark' ? 'text-gray-400 hover:text-gray-200 hover:bg-gray-700/50' : 'text-gray-600 hover:text-gray-800 hover:bg-gray-200/50'
+                }`}
+              >
+                Spectrum
+              </button>
+            </div>
+
             <div className={`rounded-lg p-3 space-y-3 ${theme === 'dark' ? 'bg-gray-900/50 border border-gray-700/30' : 'bg-white border border-gray-200'}`}>
-              {/* Color Preview */}
-              <div className="flex items-center gap-3">
-                <div
-                  className={`w-14 h-14 rounded-lg border-2 shadow-lg ${theme === 'dark' ? 'border-gray-600' : 'border-gray-300'}`}
-                  style={{
-                    backgroundColor: chromaticity.hexColor,
-                    boxShadow: `0 0 20px ${chromaticity.hexColor}40`
-                  }}
-                />
-                <div className="flex-1">
-                  <p className={`text-[10px] uppercase tracking-wide ${theme === 'dark' ? 'text-gray-500' : 'text-gray-600'}`}>HEX Color</p>
-                  <p className={`text-sm font-mono font-semibold ${theme === 'dark' ? 'text-gray-200' : 'text-gray-800'}`}>{chromaticity.hexColor}</p>
-                  <p className={`text-[10px] mt-1 ${theme === 'dark' ? 'text-gray-500' : 'text-gray-600'}`}>
-                    Peak: <span className={theme === 'dark' ? 'text-gray-300' : 'text-gray-700'}>{chromaticity.dominantWavelength.toFixed(1)} nm</span>
+              {/* Color Tab Content */}
+              {monitorTab === 'color' && (
+                <>
+                  {/* Color Preview */}
+                  <div className="flex items-center gap-3">
+                    <div
+                      className={`w-14 h-14 rounded-lg border-2 shadow-lg ${theme === 'dark' ? 'border-gray-600' : 'border-gray-300'}`}
+                      style={{
+                        backgroundColor: chromaticity.hexColor,
+                        boxShadow: `0 0 20px ${chromaticity.hexColor}40`
+                      }}
+                    />
+                    <div className="flex-1">
+                      <p className={`text-[10px] uppercase tracking-wide ${theme === 'dark' ? 'text-gray-500' : 'text-gray-600'}`}>HEX Color</p>
+                      <p className={`text-sm font-mono font-semibold ${theme === 'dark' ? 'text-gray-200' : 'text-gray-800'}`}>{chromaticity.hexColor}</p>
+                      <p className={`text-[10px] mt-1 ${theme === 'dark' ? 'text-gray-500' : 'text-gray-600'}`}>
+                        Peak: <span className={theme === 'dark' ? 'text-gray-300' : 'text-gray-700'}>{chromaticity.dominantWavelength.toFixed(1)} nm</span>
+                        {shiftNm !== 0 && (
+                          <span className={`ml-1 ${shiftNm > 0 ? 'text-blue-400' : 'text-orange-400'}`}>
+                            ({shiftNm > 0 ? '+' : ''}{shiftNm.toFixed(1)})
+                          </span>
+                        )}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* CIE Coordinates */}
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className={`rounded p-2 ${theme === 'dark' ? 'bg-gray-800/80' : 'bg-gray-100'}`}>
+                      <p className={`text-[10px] mb-1 uppercase tracking-wide ${theme === 'dark' ? 'text-gray-500' : 'text-gray-600'}`}>CIE 1931</p>
+                      <div className="space-y-0.5 text-xs font-mono">
+                        <p className="flex justify-between">
+                          <span className={theme === 'dark' ? 'text-gray-500' : 'text-gray-600'}>x:</span>
+                          <span className={theme === 'dark' ? 'text-gray-200' : 'text-gray-800'}>{chromaticity.cie1931.x.toFixed(4)}</span>
+                        </p>
+                        <p className="flex justify-between">
+                          <span className={theme === 'dark' ? 'text-gray-500' : 'text-gray-600'}>y:</span>
+                          <span className={theme === 'dark' ? 'text-gray-200' : 'text-gray-800'}>{chromaticity.cie1931.y.toFixed(4)}</span>
+                        </p>
+                      </div>
+                    </div>
+                    <div className={`rounded p-2 ${theme === 'dark' ? 'bg-gray-800/80' : 'bg-gray-100'}`}>
+                      <p className={`text-[10px] mb-1 uppercase tracking-wide ${theme === 'dark' ? 'text-gray-500' : 'text-gray-600'}`}>CIE 1976</p>
+                      <div className="space-y-0.5 text-xs font-mono">
+                        <p className="flex justify-between">
+                          <span className={theme === 'dark' ? 'text-gray-500' : 'text-gray-600'}>u':</span>
+                          <span className={theme === 'dark' ? 'text-gray-200' : 'text-gray-800'}>{chromaticity.cie1976.u.toFixed(4)}</span>
+                        </p>
+                        <p className="flex justify-between">
+                          <span className={theme === 'dark' ? 'text-gray-500' : 'text-gray-600'}>v':</span>
+                          <span className={theme === 'dark' ? 'text-gray-200' : 'text-gray-800'}>{chromaticity.cie1976.v.toFixed(4)}</span>
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* XYZ Values */}
+                  <div className={`rounded p-2 ${theme === 'dark' ? 'bg-gray-800/80' : 'bg-gray-100'}`}>
+                    <p className={`text-[10px] mb-1 uppercase tracking-wide ${theme === 'dark' ? 'text-gray-500' : 'text-gray-600'}`}>XYZ Tristimulus</p>
+                    <div className="grid grid-cols-3 gap-1 text-xs font-mono">
+                      <span className="text-center"><span className={theme === 'dark' ? 'text-gray-500' : 'text-gray-600'}>X:</span> <span className={theme === 'dark' ? 'text-gray-200' : 'text-gray-800'}>{chromaticity.xyz.X.toFixed(2)}</span></span>
+                      <span className="text-center"><span className={theme === 'dark' ? 'text-gray-500' : 'text-gray-600'}>Y:</span> <span className={theme === 'dark' ? 'text-gray-200' : 'text-gray-800'}>{chromaticity.xyz.Y.toFixed(2)}</span></span>
+                      <span className="text-center"><span className={theme === 'dark' ? 'text-gray-500' : 'text-gray-600'}>Z:</span> <span className={theme === 'dark' ? 'text-gray-200' : 'text-gray-800'}>{chromaticity.xyz.Z.toFixed(2)}</span></span>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {/* Spectrum Tab Content */}
+              {monitorTab === 'spectrum' && (
+                <div className="space-y-3">
+                  {/* Peak Wavelength */}
+                  <div className={`rounded p-2 ${theme === 'dark' ? 'bg-gray-800/80' : 'bg-gray-100'}`}>
+                    <p className={`text-[10px] mb-1 uppercase tracking-wide ${theme === 'dark' ? 'text-gray-500' : 'text-gray-600'}`}>Peak Wavelength</p>
+                    <p className={`text-lg font-mono font-semibold ${theme === 'dark' ? 'text-gray-200' : 'text-gray-800'}`}>
+                      {spectrumAnalysis.peakWavelength.toFixed(1)} <span className={`text-sm ${theme === 'dark' ? 'text-gray-500' : 'text-gray-600'}`}>nm</span>
+                    </p>
                     {shiftNm !== 0 && (
-                      <span className={`ml-1 ${shiftNm > 0 ? 'text-blue-400' : 'text-orange-400'}`}>
-                        ({shiftNm > 0 ? '+' : ''}{shiftNm.toFixed(1)})
-                      </span>
+                      <p className={`text-[10px] mt-1 ${shiftNm > 0 ? 'text-blue-400' : 'text-orange-400'}`}>
+                        Shift: {shiftNm > 0 ? '+' : ''}{shiftNm.toFixed(1)} nm
+                      </p>
                     )}
-                  </p>
-                </div>
-              </div>
+                  </div>
 
-              {/* CIE Coordinates */}
-              <div className="grid grid-cols-2 gap-2">
-                <div className={`rounded p-2 ${theme === 'dark' ? 'bg-gray-800/80' : 'bg-gray-100'}`}>
-                  <p className={`text-[10px] mb-1 uppercase tracking-wide ${theme === 'dark' ? 'text-gray-500' : 'text-gray-600'}`}>CIE 1931</p>
-                  <div className="space-y-0.5 text-xs font-mono">
-                    <p className="flex justify-between">
-                      <span className={theme === 'dark' ? 'text-gray-500' : 'text-gray-600'}>x:</span>
-                      <span className={theme === 'dark' ? 'text-gray-200' : 'text-gray-800'}>{chromaticity.cie1931.x.toFixed(4)}</span>
+                  {/* FWHM */}
+                  <div className={`rounded p-2 ${theme === 'dark' ? 'bg-gray-800/80' : 'bg-gray-100'}`}>
+                    <p className={`text-[10px] mb-1 uppercase tracking-wide ${theme === 'dark' ? 'text-gray-500' : 'text-gray-600'}`}>
+                      FWHM <span className="normal-case">(50%)</span>
                     </p>
-                    <p className="flex justify-between">
-                      <span className={theme === 'dark' ? 'text-gray-500' : 'text-gray-600'}>y:</span>
-                      <span className={theme === 'dark' ? 'text-gray-200' : 'text-gray-800'}>{chromaticity.cie1931.y.toFixed(4)}</span>
+                    <p className={`text-lg font-mono font-semibold ${theme === 'dark' ? 'text-gray-200' : 'text-gray-800'}`}>
+                      {spectrumAnalysis.fwhm !== null ? spectrumAnalysis.fwhm.toFixed(1) : 'N/A'} <span className={`text-sm ${theme === 'dark' ? 'text-gray-500' : 'text-gray-600'}`}>nm</span>
                     </p>
+                    {spectrumAnalysis.fwhmRange && (
+                      <p className={`text-[10px] mt-1 ${theme === 'dark' ? 'text-gray-500' : 'text-gray-600'}`}>
+                        {spectrumAnalysis.fwhmRange[0].toFixed(1)} ~ {spectrumAnalysis.fwhmRange[1].toFixed(1)} nm
+                      </p>
+                    )}
+                  </div>
+
+                  {/* FWQM */}
+                  <div className={`rounded p-2 ${theme === 'dark' ? 'bg-gray-800/80' : 'bg-gray-100'}`}>
+                    <p className={`text-[10px] mb-1 uppercase tracking-wide ${theme === 'dark' ? 'text-gray-500' : 'text-gray-600'}`}>
+                      FWQM <span className="normal-case">(25%)</span>
+                    </p>
+                    <p className={`text-lg font-mono font-semibold ${theme === 'dark' ? 'text-gray-200' : 'text-gray-800'}`}>
+                      {spectrumAnalysis.fwqm !== null ? spectrumAnalysis.fwqm.toFixed(1) : 'N/A'} <span className={`text-sm ${theme === 'dark' ? 'text-gray-500' : 'text-gray-600'}`}>nm</span>
+                    </p>
+                    {spectrumAnalysis.fwqmRange && (
+                      <p className={`text-[10px] mt-1 ${theme === 'dark' ? 'text-gray-500' : 'text-gray-600'}`}>
+                        {spectrumAnalysis.fwqmRange[0].toFixed(1)} ~ {spectrumAnalysis.fwqmRange[1].toFixed(1)} nm
+                      </p>
+                    )}
                   </div>
                 </div>
-                <div className={`rounded p-2 ${theme === 'dark' ? 'bg-gray-800/80' : 'bg-gray-100'}`}>
-                  <p className={`text-[10px] mb-1 uppercase tracking-wide ${theme === 'dark' ? 'text-gray-500' : 'text-gray-600'}`}>CIE 1976</p>
-                  <div className="space-y-0.5 text-xs font-mono">
-                    <p className="flex justify-between">
-                      <span className={theme === 'dark' ? 'text-gray-500' : 'text-gray-600'}>u':</span>
-                      <span className={theme === 'dark' ? 'text-gray-200' : 'text-gray-800'}>{chromaticity.cie1976.u.toFixed(4)}</span>
-                    </p>
-                    <p className="flex justify-between">
-                      <span className={theme === 'dark' ? 'text-gray-500' : 'text-gray-600'}>v':</span>
-                      <span className={theme === 'dark' ? 'text-gray-200' : 'text-gray-800'}>{chromaticity.cie1976.v.toFixed(4)}</span>
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              {/* XYZ Values */}
-              <div className={`rounded p-2 ${theme === 'dark' ? 'bg-gray-800/80' : 'bg-gray-100'}`}>
-                <p className={`text-[10px] mb-1 uppercase tracking-wide ${theme === 'dark' ? 'text-gray-500' : 'text-gray-600'}`}>XYZ Tristimulus</p>
-                <div className="grid grid-cols-3 gap-1 text-xs font-mono">
-                  <span className="text-center"><span className={theme === 'dark' ? 'text-gray-500' : 'text-gray-600'}>X:</span> <span className={theme === 'dark' ? 'text-gray-200' : 'text-gray-800'}>{chromaticity.xyz.X.toFixed(2)}</span></span>
-                  <span className="text-center"><span className={theme === 'dark' ? 'text-gray-500' : 'text-gray-600'}>Y:</span> <span className={theme === 'dark' ? 'text-gray-200' : 'text-gray-800'}>{chromaticity.xyz.Y.toFixed(2)}</span></span>
-                  <span className="text-center"><span className={theme === 'dark' ? 'text-gray-500' : 'text-gray-600'}>Z:</span> <span className={theme === 'dark' ? 'text-gray-200' : 'text-gray-800'}>{chromaticity.xyz.Z.toFixed(2)}</span></span>
-                </div>
-              </div>
+              )}
             </div>
           </section>
         </aside>
@@ -517,6 +603,7 @@ function App() {
           shiftNm={shiftNm}
           onShiftChange={handleShiftChange}
           chromaticity={chromaticity}
+          spectrumAnalysis={spectrumAnalysis}
           snapshots={snapshots}
           onSaveSnapshot={handleSaveSnapshot}
           onRestoreSnapshot={handleRestoreSnapshot}
