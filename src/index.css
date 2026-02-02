@@ -237,3 +237,20 @@ canvas {
     width: 20px;
   }
 }
+
+/* Mobile landscape mode - limit diagram height */
+@media (max-width: 1023px) and (orientation: landscape) {
+  /* Allow vertical scrolling in landscape mode on mobile/tablet */
+  body {
+    overflow-y: auto;
+  }
+}
+
+/* Narrow viewport styles for "Request Desktop Site" mode (~980px) */
+@media (min-width: 768px) and (max-width: 1023px) {
+  /* Ensure content doesn't overflow and is scrollable */
+  #root {
+    min-height: 100vh;
+    height: auto;
+  }
+}

@@ -43,8 +43,10 @@ const loadSession = (): Partial<SessionState> => {
 
 function App() {
   const { theme, toggleTheme } = useTheme();
-  // Note: Responsive layout now uses CSS classes (md:hidden, md:block) instead of JavaScript
+  // Note: Responsive layout uses lg: breakpoint (1024px) for 3-column layout
   // This ensures proper behavior when mobile users select "Request Desktop Site" (viewport ~980px)
+  // - Below lg: Mobile/tablet layout with FAB controls
+  // - lg+: Full 3-column desktop layout with sidebars
 
   // Load saved session state
   const savedSession = useMemo(() => loadSession(), []);
@@ -174,30 +176,30 @@ function App() {
   return (
     <div className={`min-h-screen w-full ${theme === 'dark' ? 'bg-gray-900 text-gray-100' : 'bg-white text-gray-900'}`}>
       {/* Header */}
-      <header className={`backdrop-blur-sm px-4 md:px-6 py-2 md:py-3 sticky top-0 z-10 ${theme === 'dark' ? 'bg-gray-800/80 border-b border-gray-700/50' : 'bg-gray-100/80 border-b border-gray-300/50'}`}>
+      <header className={`backdrop-blur-sm px-4 lg:px-6 py-2 lg:py-3 sticky top-0 z-10 ${theme === 'dark' ? 'bg-gray-800/80 border-b border-gray-700/50' : 'bg-gray-100/80 border-b border-gray-300/50'}`}>
         <div className="flex items-center justify-between">
           <div className="min-w-0 flex-1">
-            {/* Mobile title - hidden on md and above */}
-            <h1 className="md:hidden text-base font-bold text-blue-400 tracking-tight truncate">
+            {/* Mobile/Tablet title - hidden on lg and above */}
+            <h1 className="lg:hidden text-base font-bold text-blue-400 tracking-tight truncate">
               ISCV
             </h1>
-            {/* Desktop title - hidden below md */}
-            <h1 className="hidden md:block text-xl font-bold text-blue-400 tracking-tight truncate">
+            {/* Desktop title - hidden below lg */}
+            <h1 className="hidden lg:block text-xl font-bold text-blue-400 tracking-tight truncate">
               Interactive Spectrum-to-Color Visualizer
             </h1>
-            {/* Mobile subtitle */}
-            <p className={`md:hidden text-[10px] mt-0.5 truncate ${theme === 'dark' ? 'text-gray-500' : 'text-gray-600'}`}>
+            {/* Mobile/Tablet subtitle */}
+            <p className={`lg:hidden text-[10px] mt-0.5 truncate ${theme === 'dark' ? 'text-gray-500' : 'text-gray-600'}`}>
               Spectrum Analysis Tool
             </p>
             {/* Desktop subtitle */}
-            <p className={`hidden md:block text-xs mt-0.5 truncate ${theme === 'dark' ? 'text-gray-500' : 'text-gray-600'}`}>
+            <p className={`hidden lg:block text-xs mt-0.5 truncate ${theme === 'dark' ? 'text-gray-500' : 'text-gray-600'}`}>
               ISCV - Emission Spectrum Analysis Tool for OLED/Display Research
             </p>
           </div>
-          <div className="flex items-center gap-2 md:gap-4 flex-shrink-0">
+          <div className="flex items-center gap-2 lg:gap-4 flex-shrink-0">
             <button
               onClick={handleResetAll}
-              className={`px-2 py-1 md:px-3 md:py-1.5 text-xs rounded-lg transition-colors ${theme === 'dark' ? 'bg-gray-700 hover:bg-gray-600 text-gray-300' : 'bg-gray-200 hover:bg-gray-300 text-gray-700'}`}
+              className={`px-2 py-1 lg:px-3 lg:py-1.5 text-xs rounded-lg transition-colors ${theme === 'dark' ? 'bg-gray-700 hover:bg-gray-600 text-gray-300' : 'bg-gray-200 hover:bg-gray-300 text-gray-700'}`}
               title="Reset all settings"
             >
               Reset All
@@ -218,18 +220,20 @@ function App() {
                 </svg>
               )}
             </button>
-            {/* Version - hidden on mobile */}
-            <div className={`hidden md:block text-xs ${theme === 'dark' ? 'text-gray-600' : 'text-gray-500'}`}>
+            {/* Version - hidden on mobile/tablet */}
+            <div className={`hidden lg:block text-xs ${theme === 'dark' ? 'text-gray-600' : 'text-gray-500'}`}>
               v{__APP_VERSION__}
             </div>
           </div>
         </div>
       </header>
 
-      {/* Main content area - mobile uses smaller header height */}
-      <div className="flex flex-col md:flex-row h-[calc(100vh-48px)] md:h-[calc(100vh-56px)]">
-        {/* Left Sidebar - Hidden on mobile, 280px on desktop */}
-        <aside className={`hidden md:block w-[280px] flex-shrink-0 p-4 overflow-y-auto ${theme === 'dark' ? 'bg-gray-800/50 border-r border-gray-700/50' : 'bg-gray-50 border-r border-gray-200'}`}>
+      {/* Main content area - flexible layout with overflow handling */}
+      {/* Changed from fixed height to min-height + overflow for better mobile desktop mode support */}
+      <div className="flex flex-col lg:flex-row min-h-[calc(100vh-48px)] lg:min-h-[calc(100vh-56px)] lg:h-[calc(100vh-56px)] overflow-y-auto lg:overflow-hidden">
+        {/* Left Sidebar - Hidden on mobile/tablet, shown on lg+ */}
+        {/* Width: 220px on lg, 280px on xl+ for narrow viewport support */}
+        <aside className={`hidden lg:block lg:w-[220px] xl:w-[280px] flex-shrink-0 p-3 xl:p-4 overflow-y-auto ${theme === 'dark' ? 'bg-gray-800/50 border-r border-gray-700/50' : 'bg-gray-50 border-r border-gray-200'}`}>
           {/* Data Input Section */}
           <section className="mb-5">
             <h2 className={`text-[11px] font-semibold mb-2 uppercase tracking-wider flex items-center gap-2 ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>
@@ -458,13 +462,14 @@ function App() {
         </aside>
 
         {/* Main Canvas Area */}
-        <main className="flex-1 p-2 md:p-4 flex flex-col min-w-0 overflow-hidden">
+        {/* Changed overflow-hidden to allow content visibility on narrow viewports */}
+        <main className="flex-1 p-2 lg:p-4 flex flex-col min-w-0 overflow-visible lg:overflow-hidden">
           {/* Mode Toggle */}
-          <div className="flex justify-center mb-2 md:mb-3">
+          <div className="flex justify-center mb-2 lg:mb-3">
             <div className={`inline-flex rounded-lg p-0.5 ${theme === 'dark' ? 'bg-gray-800/80 border border-gray-700/50' : 'bg-gray-200/80 border border-gray-300/50'}`}>
               <button
                 onClick={() => setDiagramMode('CIE1931')}
-                className={`px-3 md:px-4 py-1.5 text-xs font-medium rounded-md transition-all duration-200 touch-target
+                className={`px-3 lg:px-4 py-1.5 text-xs font-medium rounded-md transition-all duration-200 touch-target
                   ${diagramMode === 'CIE1931'
                     ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20'
                     : theme === 'dark' ? 'text-gray-400 hover:text-gray-200 hover:bg-gray-700/50' : 'text-gray-600 hover:text-gray-800 hover:bg-gray-300/50'
@@ -474,7 +479,7 @@ function App() {
               </button>
               <button
                 onClick={() => setDiagramMode('CIE1976')}
-                className={`px-3 md:px-4 py-1.5 text-xs font-medium rounded-md transition-all duration-200 touch-target
+                className={`px-3 lg:px-4 py-1.5 text-xs font-medium rounded-md transition-all duration-200 touch-target
                   ${diagramMode === 'CIE1976'
                     ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20'
                     : theme === 'dark' ? 'text-gray-400 hover:text-gray-200 hover:bg-gray-700/50' : 'text-gray-600 hover:text-gray-800 hover:bg-gray-300/50'
@@ -485,8 +490,10 @@ function App() {
             </div>
           </div>
 
-          {/* CIE Diagram - mobile gets aspect-square constraint */}
-          <div className={`flex-1 rounded-xl overflow-hidden shadow-inner aspect-square max-h-[70vh] md:aspect-auto md:max-h-none ${theme === 'dark' ? 'bg-gray-800/30 border border-gray-700/30' : 'bg-gray-100/50 border border-gray-200'}`}>
+          {/* CIE Diagram - responsive constraints for various viewport sizes */}
+          {/* Mobile (<lg): aspect-square with max-h-[60vh] for portrait, max-h-[50vh] for landscape */}
+          {/* Desktop (lg+): flex-1 fills remaining space */}
+          <div className={`flex-1 rounded-xl overflow-hidden shadow-inner aspect-square max-h-[min(60vh,calc(100vw-2rem))] lg:aspect-auto lg:max-h-none lg:min-h-[400px] ${theme === 'dark' ? 'bg-gray-800/30 border border-gray-700/30' : 'bg-gray-100/50 border border-gray-200'}`}>
             <CIEDiagram
               currentPoint={chromaticity.cie1931}
               currentPointUV={chromaticity.cie1976}
@@ -507,14 +514,15 @@ function App() {
             />
           </div>
 
-          {/* Interaction hints - Hidden on mobile (md:block) */}
-          <p className={`hidden md:block text-center text-[10px] mt-2 ${theme === 'dark' ? 'text-gray-600' : 'text-gray-500'}`}>
+          {/* Interaction hints - Hidden on mobile, shown on lg+ */}
+          <p className={`hidden lg:block text-center text-[10px] mt-2 ${theme === 'dark' ? 'text-gray-600' : 'text-gray-500'}`}>
             Drag ridge to shift wavelength | Scroll to zoom | Click and drag to pan | Double-click axis to set range
           </p>
         </main>
 
-        {/* Right Sidebar - Hidden on mobile, 280px on desktop */}
-        <aside className={`hidden md:block w-[280px] flex-shrink-0 p-4 overflow-y-auto ${theme === 'dark' ? 'bg-gray-800/50 border-l border-gray-700/50' : 'bg-gray-50 border-l border-gray-200'}`}>
+        {/* Right Sidebar - Hidden on mobile/tablet, shown on lg+ */}
+        {/* Width: 220px on lg, 280px on xl+ for narrow viewport support */}
+        <aside className={`hidden lg:block lg:w-[220px] xl:w-[280px] flex-shrink-0 p-3 xl:p-4 overflow-y-auto ${theme === 'dark' ? 'bg-gray-800/50 border-l border-gray-700/50' : 'bg-gray-50 border-l border-gray-200'}`}>
           {/* Gamut Reference */}
           <section className="mb-5">
             <h2 className={`text-[11px] font-semibold mb-2 uppercase tracking-wider flex items-center gap-2 ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>
@@ -605,8 +613,9 @@ function App() {
         </aside>
       </div>
 
-      {/* Mobile Controls - Only shown on mobile (hidden on md and above) */}
-      <div className="md:hidden">
+      {/* Mobile Controls - Only shown on mobile/tablet (hidden on lg and above) */}
+      {/* Changed from md:hidden to lg:hidden to support mobile desktop mode (~980px viewport) */}
+      <div className="lg:hidden">
         <MobileControls
           shiftNm={shiftNm}
           onShiftChange={handleShiftChange}
