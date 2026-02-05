@@ -634,6 +634,7 @@ function App() {
           intensityScale={intensityScale}
           onIntensityScaleChange={setIntensityScale}
           onResetAll={handleResetAll}
+          onDataLoaded={handleDataLoaded}
         />
       </div>
     </div>

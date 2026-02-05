@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import type { Snapshot, GamutType, ChromaticityResult } from '../../types/spectrum';
+import type { Snapshot, GamutType, ChromaticityResult, SpectrumPoint } from '../../types/spectrum';
 import type { SpectrumAnalysis } from '../../lib/spectrum-analysis';
+import { DataInput } from '../DataInput';
 
 interface MobileControlPanelProps {
   // Wavelength shift
@@ -27,9 +28,11 @@ interface MobileControlPanelProps {
   onIntensityScaleChange?: (value: number) => void;
   // Reset all
   onResetAll?: () => void;
+  // Data input
+  onDataLoaded: (data: SpectrumPoint[]) => void;
 }
 
-type ControlTab = 'shift' | 'snapshot' | 'gamut' | 'info';
+type ControlTab = 'input' | 'shift' | 'snapshot' | 'gamut' | 'info';
 
 /**
  * MobileControlPanel - Inline control panel for mobile interface
@@ -52,8 +55,9 @@ export function MobileControlPanel({
   intensityScale = 1.0,
   onIntensityScaleChange,
   onResetAll,
+  onDataLoaded,
 }: MobileControlPanelProps) {
-  const [activeTab, setActiveTab] = useState<ControlTab>('shift');
+  const [activeTab, setActiveTab] = useState<ControlTab>('input');
 
   // Theme colors
   const bgColor = theme === 'dark' ? 'bg-gray-800' : 'bg-gray-100';
@@ -83,6 +87,7 @@ export function MobileControlPanel({
       {/* Tab Navigation */}
       <div className={`flex gap-1 p-2 ${bgColor}`}>
         {[
+          { key: 'input' as const, label: 'Input', icon: '📁' },
           { key: 'shift' as const, label: 'Shift', icon: '↔' },
           { key: 'snapshot' as const, label: 'Snap', icon: '📸' },
           { key: 'gamut' as const, label: 'Gamut', icon: '△' },
@@ -105,6 +110,13 @@ export function MobileControlPanel({
 
       {/* Content Area - scrollable */}
       <div className="overflow-y-auto max-h-[40vh] p-3">
+        {/* Input Tab */}
+        {activeTab === 'input' && (
+          <div className="space-y-3">
+            <DataInput onDataLoaded={onDataLoaded} />
+          </div>
+        )}
+
         {/* Shift Tab */}
         {activeTab === 'shift' && (
           <div className="space-y-3">
