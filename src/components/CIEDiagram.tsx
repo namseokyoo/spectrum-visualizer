@@ -116,6 +116,8 @@ interface CIEDiagramProps {
   onZoomChange?: (transform: { k: number; x: number; y: number }) => void;
   customAxisRanges?: CustomAxisRanges;
   onAxisRangeChange?: (ranges: CustomAxisRanges) => void;
+  /** Ref callback to expose the internal SVG element for export */
+  svgExportRef?: (el: SVGSVGElement | null) => void;
 }
 
 // Calculate normal vector at a point on the locus (pointing outward from the color space)
@@ -452,9 +454,17 @@ export function CIEDiagram({
   onZoomChange,
   customAxisRanges,
   onAxisRangeChange,
+  svgExportRef,
 }: CIEDiagramProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // Sync external ref for export functionality
+  useEffect(() => {
+    if (svgExportRef) {
+      svgExportRef(svgRef.current);
+    }
+  }, [svgExportRef]);
   const isDragging = useRef(false);
   const lastDragPos = useRef<{ x: number; y: number } | null>(null);
   const animationFrameRef = useRef<number | null>(null);
@@ -1915,7 +1925,7 @@ export function CIEDiagram({
   return (
     <div
       ref={containerRef}
-      className="relative w-full h-full"
+      className="relative w-full h-full cie-diagram-container"
       tabIndex={0}
       style={{ minHeight: '400px', outline: 'none' }}
     >

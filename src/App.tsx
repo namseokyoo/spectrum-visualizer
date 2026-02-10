@@ -1,11 +1,14 @@
-import { useState, useCallback, useMemo, useEffect } from 'react';
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { DataInput } from './components/DataInput';
 import { CIEDiagram } from './components/CIEDiagram';
 import { SnapshotList } from './components/SnapshotList';
 import { MobileControlPanel } from './components/mobile/MobileControlPanel';
+import { ExportModal } from './components/ExportModal';
+import type { ExportFormat } from './components/ExportModal';
 import { useSnapshots } from './hooks/useSnapshots';
 import { useTheme } from './hooks/useTheme';
 import { calculateChromaticity, shiftSpectrum, PRESET_GREEN, analyzeSpectrum } from './lib';
+import { exportCSV, exportSVG, exportPNG, exportJSON, generateFilename, downloadFile, downloadDataUrl } from './lib/export';
 import type { SpectrumPoint, ChromaticityResult, DiagramMode, GamutType } from './types/spectrum';
 
 // Session storage key and interface
@@ -73,6 +76,10 @@ function App() {
 
   // Monitor section tab state
   const [monitorTab, setMonitorTab] = useState<'color' | 'spectrum'>('color');
+
+  // Export modal state
+  const [showExportModal, setShowExportModal] = useState(false);
+  const svgExportElRef = useRef<SVGSVGElement | null>(null);
 
   // Snapshot management
   const {
@@ -168,6 +175,67 @@ function App() {
     setZoomTransform(transform);
   }, []);
 
+  // Handle export (async for PNG support)
+  const handleExport = useCallback(async (format: ExportFormat, includeSnapshots: boolean) => {
+    const exportData = {
+      spectrum,
+      chromaticity,
+      analysis: spectrumAnalysis,
+      diagramMode,
+      shiftNm,
+      snapshots,
+    };
+
+    if (format === 'csv') {
+      const csvContent = exportCSV(exportData, { includeSnapshots });
+      downloadFile(csvContent, generateFilename('csv'), 'text/csv;charset=utf-8');
+    } else if (format === 'svg') {
+      if (!svgExportElRef.current) {
+        console.warn('SVG element not available for export');
+        return;
+      }
+      const svgContent = exportSVG(svgExportElRef.current, { includeInlineStyles: true });
+      downloadFile(svgContent, generateFilename('svg'), 'image/svg+xml;charset=utf-8');
+    } else if (format === 'png') {
+      if (!svgExportElRef.current) {
+        console.warn('SVG element not available for PNG export');
+        return;
+      }
+      // Capture the SVG's parent container for a cleaner raster output
+      const targetElement = svgExportElRef.current.closest('.cie-diagram-container') as HTMLElement
+        ?? svgExportElRef.current.parentElement;
+      if (!targetElement) {
+        console.warn('No container element found for PNG export');
+        return;
+      }
+      try {
+        const backgroundColor = theme === 'dark' ? '#1f2937' : '#ffffff';
+        const dataUrl = await exportPNG(targetElement, {
+          pixelRatio: 2,
+          backgroundColor,
+        });
+        downloadDataUrl(dataUrl, generateFilename('png'));
+      } catch (err) {
+        console.error('PNG export failed:', err);
+      }
+    } else if (format === 'json') {
+      const jsonContent = exportJSON(
+        {
+          ...exportData,
+          enabledGamuts,
+          intensityScale,
+        },
+        { includeSnapshots }
+      );
+      downloadFile(jsonContent, generateFilename('json'), 'application/json;charset=utf-8');
+    }
+  }, [spectrum, chromaticity, spectrumAnalysis, diagramMode, shiftNm, snapshots, enabledGamuts, intensityScale, theme]);
+
+  // SVG ref callback for export
+  const handleSvgExportRef = useCallback((el: SVGSVGElement | null) => {
+    svgExportElRef.current = el;
+  }, []);
+
   // Restore snapshot
   const handleRestoreSnapshot = useCallback((snapshot: { shiftNm: number }) => {
     setShiftNm(snapshot.shiftNm);
@@ -197,6 +265,16 @@ function App() {
             </p>
           </div>
           <div className="flex items-center gap-2 lg:gap-4 flex-shrink-0">
+            <button
+              onClick={() => setShowExportModal(true)}
+              className={`px-2 py-1 lg:px-3 lg:py-1.5 text-xs rounded-lg transition-colors flex items-center gap-1 ${theme === 'dark' ? 'bg-blue-600 hover:bg-blue-500 text-white' : 'bg-blue-600 hover:bg-blue-500 text-white'}`}
+              title="Export data"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+              <span className="hidden lg:inline">Export</span>
+            </button>
             <button
               onClick={handleResetAll}
               className={`px-2 py-1 lg:px-3 lg:py-1.5 text-xs rounded-lg transition-colors ${theme === 'dark' ? 'bg-gray-700 hover:bg-gray-600 text-gray-300' : 'bg-gray-200 hover:bg-gray-300 text-gray-700'}`}
@@ -512,6 +590,7 @@ function App() {
               onZoomChange={handleZoomChange}
               customAxisRanges={customAxisRanges}
               onAxisRangeChange={setCustomAxisRanges}
+              svgExportRef={handleSvgExportRef}
             />
           </div>
 
@@ -637,6 +716,15 @@ function App() {
           onDataLoaded={handleDataLoaded}
         />
       </div>
+
+      {/* Export Modal */}
+      <ExportModal
+        isOpen={showExportModal}
+        onClose={() => setShowExportModal(false)}
+        onExport={handleExport}
+        snapshotCount={snapshots.length}
+        theme={theme}
+      />
     </div>
   );
 }
