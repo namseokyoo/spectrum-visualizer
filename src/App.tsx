@@ -1,4 +1,5 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
+import * as Sentry from '@sentry/react';
 import { DataInput } from './components/DataInput';
 import { CIEDiagram } from './components/CIEDiagram';
 import { SnapshotList } from './components/SnapshotList';
@@ -216,6 +217,7 @@ function App() {
         });
         downloadDataUrl(dataUrl, generateFilename('png'));
       } catch (err) {
+        Sentry.captureException(err, { tags: { context: 'png-export' } });
         console.error('PNG export failed:', err);
       }
     } else if (format === 'json') {

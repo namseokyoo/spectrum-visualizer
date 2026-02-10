@@ -4,6 +4,7 @@
  * Parse spectrum data from clipboard paste (Excel, Origin, etc.)
  */
 
+import * as Sentry from '@sentry/react';
 import { parseSpectrumText, validateSpectrumData } from './file-parser';
 import type { SpectrumPoint } from '../types/spectrum';
 
@@ -49,6 +50,7 @@ export function parseAndValidateClipboard(clipboardText: string): {
       ...validation,
     };
   } catch (error) {
+    Sentry.captureException(error, { tags: { context: 'clipboard-parser' } });
     return {
       data: [],
       valid: false,

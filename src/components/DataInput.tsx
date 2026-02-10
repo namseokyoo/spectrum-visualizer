@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, type DragEvent, type ChangeEvent } from 'react';
+import * as Sentry from '@sentry/react';
 import { parseSpectrumFile } from '../lib/file-parser';
 import { parseAndValidateClipboard, getExampleFormat, createSampleData } from '../lib/clipboard-parser';
 import { normalizeSpectrum } from '../lib/normalize';
@@ -54,6 +55,7 @@ export function DataInput({ onDataLoaded }: DataInputProps) {
       const processed = processData(data);
       onDataLoaded(processed);
     } catch (err) {
+      Sentry.captureException(err, { tags: { context: 'data-input-file' } });
       setError(`Failed to parse file: ${err}`);
     } finally {
       setIsLoading(false);

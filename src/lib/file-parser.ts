@@ -4,6 +4,7 @@
  * Parse CSV and TXT files containing spectrum data
  */
 
+import * as Sentry from '@sentry/react';
 import type { SpectrumPoint } from '../types/spectrum';
 
 /**
@@ -134,6 +135,7 @@ export async function parseSpectrumFile(file: File): Promise<SpectrumPoint[]> {
           const points = parseSpectrumText(content);
           resolve(points);
         } catch (error) {
+          Sentry.captureException(error, { tags: { context: 'file-parser' } });
           reject(new Error(`Failed to parse file: ${error}`));
         }
       } else {
@@ -142,7 +144,9 @@ export async function parseSpectrumFile(file: File): Promise<SpectrumPoint[]> {
     };
 
     reader.onerror = () => {
-      reject(new Error('Failed to read file'));
+      const err = new Error('Failed to read file');
+      Sentry.captureException(err, { tags: { context: 'file-parser' } });
+      reject(err);
     };
 
     reader.readAsText(file);
