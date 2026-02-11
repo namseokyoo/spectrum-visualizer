@@ -192,21 +192,18 @@ function App() {
       downloadFile(csvContent, generateFilename('csv'), 'text/csv;charset=utf-8');
     } else if (format === 'svg') {
       if (!svgExportElRef.current) {
-        console.warn('SVG element not available for export');
         return;
       }
       const svgContent = exportSVG(svgExportElRef.current, { includeInlineStyles: true });
       downloadFile(svgContent, generateFilename('svg'), 'image/svg+xml;charset=utf-8');
     } else if (format === 'png') {
       if (!svgExportElRef.current) {
-        console.warn('SVG element not available for PNG export');
         return;
       }
       // Capture the SVG's parent container for a cleaner raster output
       const targetElement = svgExportElRef.current.closest('.cie-diagram-container') as HTMLElement
         ?? svgExportElRef.current.parentElement;
       if (!targetElement) {
-        console.warn('No container element found for PNG export');
         return;
       }
       try {
@@ -218,7 +215,6 @@ function App() {
         downloadDataUrl(dataUrl, generateFilename('png'));
       } catch (err) {
         Sentry.captureException(err, { tags: { context: 'png-export' } });
-        console.error('PNG export failed:', err);
       }
     } else if (format === 'json') {
       const jsonContent = exportJSON(

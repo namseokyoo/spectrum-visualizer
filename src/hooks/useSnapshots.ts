@@ -6,6 +6,7 @@
  */
 
 import { useState, useCallback, useMemo } from 'react';
+import * as Sentry from '@sentry/react';
 import type { Snapshot, ChromaticityResult } from '../types/spectrum';
 
 const MAX_SNAPSHOTS = 10;
@@ -37,7 +38,7 @@ function loadFromStorage(): Snapshot[] {
       return JSON.parse(stored);
     }
   } catch (e) {
-    console.warn('Failed to load snapshots from storage:', e);
+    Sentry.captureException(e, { tags: { context: 'snapshot-load' } });
   }
   return [];
 }
@@ -46,7 +47,7 @@ function saveToStorage(snapshots: Snapshot[]): void {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshots));
   } catch (e) {
-    console.warn('Failed to save snapshots to storage:', e);
+    Sentry.captureException(e, { tags: { context: 'snapshot-save' } });
   }
 }
 
@@ -67,7 +68,6 @@ export function useSnapshots(options: UseSnapshotsOptions = {}): UseSnapshotsRet
   const addSnapshot = useCallback(
     (shiftNm: number, chromaticity: ChromaticityResult, label?: string): Snapshot | null => {
       if (snapshots.length >= maxSnapshots) {
-        console.warn(`Maximum snapshots (${maxSnapshots}) reached`);
         return null;
       }
 
